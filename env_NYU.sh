@@ -1,5 +1,6 @@
 #!/bin/sh
-workdir=$(cd $(dirname $0); pwd)
+# workdir=$(cd $(dirname $0); pwd)
+workdir=$(cd $(dirname "${BASH_SOURCE[0]}") && pwd)
 echo "workdir:" $workdir
 
 export DATA_LOG=$workdir/logdir/NYU_b4_F100_virtualStereo

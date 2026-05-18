@@ -118,6 +118,18 @@ class OccDepth(pl.LightningModule):
                 occluded_cls=self.occluded_cls,
                 infer_mode=self.infer_mode,
             )
+        elif self.dataset == "sweeper":
+            self.net_3d_decoder = UNet3DKitti(
+                self.n_classes,
+                nn.BatchNorm3d,
+                project_scale=self.project_scale,
+                feature=self.feature,
+                full_scene_size=self.full_scene_size,
+                context_prior=self.context_prior,
+                cascade_cls=self.cascade_cls,
+                occluded_cls=self.occluded_cls,
+                infer_mode=self.infer_mode,
+            )
         self.net_rgb = UNet2D.build(
             out_feature=self.feature_2d_oc,
             use_decoder=True,
@@ -142,6 +154,8 @@ class OccDepth(pl.LightningModule):
             self.total_batch = (3834 // batch_size) * 30
         elif self.dataset == "NYU":
             self.total_batch = (795 // batch_size) * 30
+        elif self.dataset == "sweeper":
+            self.total_batch = (3000 // batch_size) * 30
         else:
             raise NotImplementedError(self.dataset)
         self.cur_batch = 0
@@ -360,6 +374,8 @@ class OccDepth(pl.LightningModule):
         elif self.dataset == "tartanair":
             vox_origin = batch["vox_origin"]
         elif self.dataset == "kitti":
+            vox_origin = None
+        elif self.dataset == "sweeper":
             vox_origin = None
         else:
             raise NotImplementedError(
@@ -597,6 +613,12 @@ class OccDepth(pl.LightningModule):
                 self.parameters(), lr=self.lr, weight_decay=self.weight_decay
             )
             scheduler = MultiStepLR(optimizer, milestones=[20], gamma=0.1)
+            return [optimizer], [scheduler]
+        elif self.dataset == "sweeper":
+            optimizer = torch.optim.AdamW(
+                self.parameters(),lr=self.lr, weight_decay=self.weight_decay
+            )
+            scheduler = MultiStepLR(optimizer,milestones=[18, 24],gamma=0.4)
             return [optimizer], [scheduler]
 
 

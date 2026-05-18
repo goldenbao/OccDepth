@@ -3,6 +3,14 @@ from occdepth.data.semantic_kitti.params import (
     semantic_kitti_class_frequencies,
     kitti_class_names,
 )
+
+from occdepth.data.sweeper.params import (
+    sweeper_class_names,
+    sweeper_class_weights,
+)
+
+from occdepth.data.sweeper.sweeper_dm import SweeperDataModule   
+
 from occdepth.data.NYU.params import (
     class_weights as NYU_class_weights,
     NYU_class_names,
@@ -65,7 +73,28 @@ def main(config: DictConfig):
     logdir = config.logdir
     full_scene_size = tuple(config.full_scene_size)
     # Setup dataloaders
-    if config.dataset == "kitti":
+    if config.dataset == "sweeper":
+        class_names = sweeper_class_names
+        class_weights = sweeper_class_weights
+        class_weights_occ = torch.FloatTensor([0.05, 2])
+        
+        data_module = SweeperDataModule(
+            root=config.data_root,
+            preprocess_root=config.data_preprocess_root,
+            frustum_size=config.frustum_size,
+            project_scale=config.project_scale,
+            batch_size=int(config.batch_size_per_gpu),
+            num_workers=int(config.num_workers_per_gpu),
+            pattern_id=config.pattern_id,
+            multi_view_mode=config.multi_view_mode,
+            use_stereo_depth_gt=config.use_stereo_depth_gt,
+            use_lidar_depth_gt=config.use_lidar_depth_gt,
+            data_stereo_depth_root=config.data_stereo_depth_root,
+            data_lidar_depth_root=config.data_lidar_depth_root,
+            occluded_cls=config.occluded_cls,
+            use_strong_img_aug=config.use_strong_img_aug,
+        )
+    elif config.dataset == "kitti":
         class_names = kitti_class_names
         class_weights = torch.from_numpy(
             1 / np.log(semantic_kitti_class_frequencies + 0.001)

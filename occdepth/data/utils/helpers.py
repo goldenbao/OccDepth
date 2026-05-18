@@ -130,9 +130,9 @@ def vox2pix(cam_E, cam_k, vox_origin, voxel_size, img_W, img_H, scene_size, patt
 
     # Compute the voxels centroids in lidar cooridnates
     vol_dim = (
-        np.ceil((vol_bnds[:, 1] - vol_bnds[:, 0]) / voxel_size)
-        .copy(order="C")
-        .astype(int)
+        np.floor(
+            ((vol_bnds[:, 1] - vol_bnds[:, 0]) / voxel_size) + 1e-6
+        ).astype(int)
     )
     xv, yv, zv = np.meshgrid(
         range(vol_dim[0]), range(vol_dim[1]), range(vol_dim[2]), indexing="ij"

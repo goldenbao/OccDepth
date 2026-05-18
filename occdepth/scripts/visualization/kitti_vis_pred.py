@@ -20,7 +20,7 @@ def get_grid_coords(dims, resolution):
     # Obtaining the grid with coords...
     xx, yy, zz = np.meshgrid(g_xx[:-1], g_yy[:-1], g_zz[:-1])
     coords_grid = np.array([xx.flatten(), yy.flatten(), zz.flatten()]).T
-    coords_grid = coords_grid.astype(np.float)
+    coords_grid = coords_grid.astype(float)
 
     coords_grid = (coords_grid * resolution) + resolution / 2
 
@@ -165,36 +165,38 @@ def main(config: DictConfig):
     with open(scan, "rb") as handle:
         b = pickle.load(handle)
 
-    fov_mask_1 = b["fov_mask_1"]
+    # fov_mask_1 = b["fov_mask_1"]
+    fov_mask_1 = b["fov_mask_1"][0].squeeze()
     T_velo_2_cam = b["T_velo_2_cam"]
     vox_origin = np.array([0, -25.6, -2])
 
     y_pred = b["y_pred"]
 
-    if config.dataset == "kitti_360":
-        # Visualize KITTI-360
-        draw(
-            y_pred,
-            T_velo_2_cam,
-            vox_origin,
-            fov_mask_1,
-            voxel_size=0.2,
-            f=552.55426,
-            img_size=(1408, 376),
-            d=7,
-        )
-    else:
+    # if config.dataset == "kitti_360":
+    #     # Visualize KITTI-360
+    #     draw(
+    #         y_pred,
+    #         T_velo_2_cam,
+    #         vox_origin,
+    #         fov_mask_1,
+    #         voxel_size=0.2,
+    #         f=552.55426,
+    #         img_size=(1408, 376),
+    #         d=7,
+    #     )
+    # else:
+    
         # Visualize Semantic KITTI
-        draw(
-            y_pred,
-            T_velo_2_cam,
-            vox_origin,
-            fov_mask_1,
-            img_size=(1220, 370),
-            f=707.0912,
-            voxel_size=0.2,
-            d=7,
-        )
+    draw(
+        y_pred,
+        T_velo_2_cam,
+        vox_origin,
+        fov_mask_1,
+        img_size=(1220, 370),
+        f=707.0912,
+        voxel_size=0.2,
+        d=7,
+    )
 
 
 if __name__ == "__main__":

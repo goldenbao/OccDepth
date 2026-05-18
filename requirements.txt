@@ -10,8 +10,8 @@ numba==0.53
 imageio
 protobuf==3.19.6
 tabulate
-timm
-mmcv-full==1.4.0
+timm==0.4.12
+mmcv-full==1.7.0
 mmdet==2.20.0
 scikit-image
 segmentation_models_pytorch

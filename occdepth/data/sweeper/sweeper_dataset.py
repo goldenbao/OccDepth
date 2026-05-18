@@ -3,6 +3,7 @@ import os
 import glob
 from torch.utils.data import Dataset
 import numpy as np
+import yaml
 from PIL import Image
 from torchvision import transforms
 from occdepth.data.utils.helpers import (
@@ -43,8 +44,71 @@ def load_depth(depth_path, scale=256):
     depth[depth > 0] = depth[depth > 0] / scale
     return depth
 
+def get_sweeper_calib(config_path):
+    """
+    适配扫地机参数的位姿处理逻辑
+    config: 传入 yaml 配置文件中的内容 (occ_config.yaml)
+    
+    """
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config = yaml.safe_load(f)
+        
+    # 1. 提取内参 (K)
+    # 根据 yaml: fx, fy, cx, cy
+    fx = config['depth']['fx']
+    fy = config['depth']['fy']
+    cx = config['depth']['cx']
+    cy = config['depth']['cy']
+    
+        
+    # 扫地机通常左右相机共用一套内参（Rectified）
+    cam_k = np.array([
+        [fx,  0, cx],
+        [ 0, fy, cy],
+        [ 0,  0,  1]
+    ])
 
-class KittiDataset(Dataset):
+
+    # 2. 提取外参 (T_camera_to_body)
+    # 注意：你提供的是 camera_external，通常定义为 P_body = T * P_camera
+    # 这意味着 camera_external 本身就是 T_cam_to_body
+    T_cam_to_body = np.array(config['occupancy']['camera_external']).reshape(4, 4)
+
+    # 在很多算法中（如 OccDepth），习惯记录 Body to Camera (类似雷达到相机)
+    # 如果你需要 P_camera = T_body_2_cam * P_body，则需要取逆
+    T_body_2_caml = np.linalg.inv(T_cam_to_body)
+
+    # 3. 处理右相机 (Camera 3)
+    # 扫地机是双目系统，右相机相对于左相机只有 x 方向的 Baseline 位移
+    baseline = config['depth']['baseline']
+    
+    # 构建左相机到右相机的变换矩阵 (右 = 左 + 平移)
+    T_caml_to_camr = np.identity(4)
+    T_caml_to_camr[0, 3] = -baseline # 右相机在左相机的右侧，坐标系变换通常为负
+    
+    # 因此，Body 到右相机的变换 = 左到右变换 @ Body到左变换
+    T_body_2_camr = T_caml_to_camr @ T_body_2_caml
+
+    # 4. 封装返回
+    # 保持与原代码格式一致，返回 [T_left, T_right]
+    T_velo_2_cam = np.array([T_body_2_caml, T_body_2_camr])
+    
+    # 额外补充：如果你需要像原代码那样的 proj_matrix (P = K @ [R|t])
+    def make_proj_matrix(K, T):
+        # T 是 4x4，取前三行变成 3x4
+        return K @ T[:3, :4]
+
+    proj_matrixl = make_proj_matrix(cam_k, T_body_2_caml)
+    proj_matrixr = make_proj_matrix(cam_k, T_body_2_camr)
+    proj_matrix = np.array([proj_matrixl, proj_matrixr])
+    
+    # 适配 3x4 格式
+    camk_3x4 = np.zeros((3, 4))
+    camk_3x4[:3, :3] = cam_k
+
+    return T_velo_2_cam, proj_matrix, camk_3x4
+
+class SwepperDataset(Dataset):
     def __init__(
         self,
         split,
@@ -66,11 +130,12 @@ class KittiDataset(Dataset):
         super().__init__()
         self.root = root
         self.label_root = os.path.join(preprocess_root, "labels")
-        self.n_classes = 20
+        self.n_classes = 24  # 语义的种类 free + 各种label 不包括unknown（遮挡）
         splits = {
-            "train": ["00", "01", "02", "03", "04", "05", "06", "07", "09", "10"],
-            "val": ["08"],
-            "test": ["11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21"],
+            # "train": ["475+6207_sun"],
+             "train": ["475+6207_sun/train"],
+            "val": ["475+6207_sun/test"],
+            "test":["475+6207_sun/test"],
         }
         self.split = split
         self.sequences = splits[split]
@@ -78,13 +143,13 @@ class KittiDataset(Dataset):
         self.frustum_size = frustum_size
         self.project_scale = project_scale
         self.output_scale = math.ceil(self.project_scale / 2)
-        self.scene_size = (51.2, 51.2, 6.4)
-        self.vox_origin = np.array([0, -25.6, -2])
+        self.scene_size = (0.8, 0.8, 0.48)  # 场景范围，单位为米，x/y/z分别为前后/左右/上下
+        self.vox_origin = np.array([0.1, -0.4, -0.1]) #体素原点在世界坐标系下的位置
         self.fliplr = fliplr
 
-        self.voxel_size = 0.2  # 0.2m
-        self.img_W = 1220  # 1216
-        self.img_H = 370  # 352
+        self.voxel_size = 0.01  # 
+        self.img_W = 640  # 
+        self.img_H = 480  # 
         self.pattern_id = pattern_id
         self.multi_view_mode = multi_view_mode
 
@@ -122,41 +187,48 @@ class KittiDataset(Dataset):
 
         self.scans = []
         for sequence in self.sequences:
-            calib = self.read_calib(
-                os.path.join(self.root, "dataset", "sequences", sequence, "calib.txt")
-            )
-            P = [calib["P2"]]
-            P.append(calib["P3"])
+            
+            # swepper para read
+            config_path = "/home/project/occgtgen/config/occ_config.yaml"
+            T_velo_2_cam, proj_matrix, cam_k = get_sweeper_calib(config_path)
+            
+            P = [cam_k]
+            P.append(cam_k)
             P = np.array(P)
-            Tr_velo_2_cam_0 = calib["Tr"]
-            proj_matrix = [P[0] @ Tr_velo_2_cam_0]
-            proj_matrix.append(P[1] @ Tr_velo_2_cam_0)
-            proj_matrix = np.array(proj_matrix)
-
-            cam_k2 = P[0][0:3, 0:3]
-            cam_k3 = P[1][0:3, 0:3]
-
-            # Fix external parameter transformation bug
-            T_velo_2_cam2 = np.identity(4)  # 4x4 matrix
-            T_velo_2_cam2[:3, :4] = np.linalg.inv(cam_k2) @ proj_matrix[0]
-
-            # Transform from lidar to cam3
-            T_velo_2_cam3 = np.identity(4)  # 4x4 matrix
-            T_velo_2_cam3[:3, :4] = np.linalg.inv(cam_k3) @ proj_matrix[1]
-
-            T_velo_2_cam = [T_velo_2_cam2, T_velo_2_cam3]
-            T_velo_2_cam = np.array(T_velo_2_cam)
-
+            
+            # region // old kitti read param
+            # calib = self.read_calib( 
+            #     os.path.join(self.root, "dataset", "sequences", sequence, "calib.txt")
+            # )
+            # P = [calib["P2"]]
+            # P.append(calib["P3"])
+            # P = np.array(P)
+            # Tr_velo_2_cam_0 = calib["Tr"]
+            # proj_matrix = [P[0] @ Tr_velo_2_cam_0]
+            # proj_matrix.append(P[1] @ Tr_velo_2_cam_0) 
+            # proj_matrix = np.array(proj_matrix)
+            # cam_k2 = P[0][0:3, 0:3]
+            # cam_k3 = P[1][0:3, 0:3]
+            # # Fix external parameter transformation bug
+            # T_velo_2_cam2 = np.identity(4)  # 4x4 matrix
+            # T_velo_2_cam2[:3, :4] = np.linalg.inv(cam_k2) @ proj_matrix[0]
+            # # Transform from lidar to cam3
+            # T_velo_2_cam3 = np.identity(4)  # 4x4 matrix
+            # T_velo_2_cam3[:3, :4] = np.linalg.inv(cam_k3) @ proj_matrix[1]
+            # T_velo_2_cam = [T_velo_2_cam2, T_velo_2_cam3]
+            # T_velo_2_cam = np.array(T_velo_2_cam)
+            # endregion
+            
             glob_path = os.path.join(
-                self.root, "dataset", "sequences", sequence, "voxels", "*.bin"
+                self.root, sequence, "occupancy_gt", "*.npy"
             )
             for voxel_path in glob.glob(glob_path):
                 self.scans.append(
                     {
                         "sequence": sequence,
-                        "P": P,
-                        "T_velo_2_cam": T_velo_2_cam,
-                        "proj_matrix": proj_matrix,
+                        "P": P, #[K T] 3*4 相机内参以及相机0到 2、3的offset,双目数据下此offset设为0
+                        "T_velo_2_cam": T_velo_2_cam, #外参 4*4
+                        "proj_matrix": proj_matrix,  #雷达投影到左右相机平面，内参*外参，3*4 x [x y z 1]
                         "voxel_path": voxel_path,
                     }
                 )
@@ -208,27 +280,23 @@ class KittiDataset(Dataset):
             T_velo_2_cam = T_velo_2_cam[0][np.newaxis, ...]
 
         filename = os.path.basename(voxel_path)
-        frame_id = os.path.splitext(filename)[0]
+        frame_id = filename.replace('SLAM_SLAM_L_', '').replace('_occ_gt','').split('.')[0]
 
         rgb_path = [
             os.path.join(
                 self.root,
-                "dataset",
-                "sequences",
                 sequence,
-                "image_2",
-                frame_id + ".png",
+                "left_sync",
+                "SLAM_SLAM_L_"+ frame_id + ".jpg",
             )
         ]
 
         rgb_path.append(
             os.path.join(
                 self.root,
-                "dataset",
-                "sequences",
                 sequence,
-                "image_3",
-                frame_id + ".png",
+                "right_sync",
+                "SLAM_SLAM_R_" + frame_id + ".jpg",
             )
         )
 
@@ -284,21 +352,20 @@ class KittiDataset(Dataset):
             )
 
         if self.split != "test":
-            target_1_path = os.path.join(
-                self.label_root, sequence, frame_id + "_1_1.npy"
-            )
-            target = np.load(target_1_path)
+            target = np.load(voxel_path)
             # 0 means unlabeled, 1-19 means class, 255 means invalid in target
             # see in `occdepth/data/semantic_kitti/semantic-kitti` learning_map
             data["target"] = target
-            target_8_path = os.path.join(
-                self.label_root, sequence, frame_id + "_1_8.npy"
-            )
-            target_1_8 = np.load(target_8_path)
+            
+            # 先不准备下采样的数据
+            # target_8_path = os.path.join(
+            #     self.label_root, sequence, frame_id + "_1_8.npy"
+            # )
+            # target_1_8 = np.load(target_8_path)
 
-            # compute supervoxel -> voxel attention matrix(4, HWD, H/2 W/2 D/2)
-            CP_mega_matrix = compute_CP_mega_matrix(target_1_8)
-            data["CP_mega_matrix"] = CP_mega_matrix
+            # # compute supervoxel -> voxel attention matrix(4, HWD, H/2 W/2 D/2)
+            # CP_mega_matrix = compute_CP_mega_matrix(target_1_8)
+            # data["CP_mega_matrix"] = CP_mega_matrix
 
         if self.with_occluded:
             occluded_path = os.path.join(
@@ -323,7 +390,7 @@ class KittiDataset(Dataset):
                 self.img_W,
                 self.img_H,
                 dataset="kitti",
-                n_classes=20,
+                n_classes=self.n_classes,
                 size=self.frustum_size,
             )
         else:
@@ -335,16 +402,15 @@ class KittiDataset(Dataset):
         # gt_depth
         gt_depth = None
         if self.split != "test":
-            if self.use_stereo_depth_gt:
+            if self.use_stereo_depth_gt:      
                 stereo_depth_path = os.path.join(
                     self.data_stereo_depth_root,
-                    "dataset",
-                    "sequences",
                     sequence,
-                    "depth",
-                    frame_id + ".png",
+                    "depth_maps",
+                    "SLAM_SLAM_L_"+ frame_id + "_depth_meter.npy",
                 )
-                gt_depth = load_depth(stereo_depth_path)
+                gt_depth=np.load(stereo_depth_path) #深度图好像没有拿来监督训练，只是单目情况下用来生成虚拟右图 ?
+                # gt_depth = load_depth(stereo_depth_path) 
                 gt_depth = [gt_depth[: self.img_H, : self.img_W]]  # crop depth
             elif self.use_lidar_depth_gt:
                 lidar_depth_path = [
@@ -455,7 +521,7 @@ if __name__ == "__main__":
 
     @hydra.main(config_name="../../config/occdepth.yaml")
     def test(config):
-        ds = KittiDataset(
+        ds = SwepperDataset(
             split="train",
             root="/data/dataset/KITTI_Odometry_Semantic",
             preprocess_root="/data/dataset/kitti_semantic_preprocess",
