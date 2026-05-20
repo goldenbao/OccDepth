@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from occdepth.models.unet3d_nyu import UNet3D as UNet3DNYU
 from occdepth.models.unet3d_kitti import UNet3D as UNet3DKitti
+from occdepth.models.unet3d_sweeper import UNet3D as UNet3DSweeper
 
 from occdepth.loss.sscMetrics import SSCMetrics
 from occdepth.loss.ssc_loss import sem_scal_loss, CE_ssc_loss, KL_sep, geo_scal_loss
@@ -119,7 +120,7 @@ class OccDepth(pl.LightningModule):
                 infer_mode=self.infer_mode,
             )
         elif self.dataset == "sweeper":
-            self.net_3d_decoder = UNet3DKitti(
+            self.net_3d_decoder = UNet3DSweeper(
                 self.n_classes,
                 nn.BatchNorm3d,
                 project_scale=self.project_scale,
