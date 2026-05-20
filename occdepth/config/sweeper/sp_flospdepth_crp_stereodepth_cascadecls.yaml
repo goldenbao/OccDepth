@@ -5,14 +5,11 @@ dataset: "sweeper"
 n_relations: 4
 
 enable_log: true
-data_root: '/data/dataset/KITTI_Odometry_Semantic'
-data_preprocess_root: '/data/dataset/kitti_semantic_preprocess'
-data_stereo_depth_root: '/data/dataset/KITTI_Odometry_Stereo_Depth'
-data_lidar_depth_root: '/data/dataset/KITTI_Odometry_Lidar_Depth'
+data_root: '/home/data/Occ_stereo'
+data_preprocess_root: '/home/data/Occ_stereo'
+data_stereo_depth_root: '/home/data/Occ_stereo'
 
-#data_root: '/data/dataset/NYU_dataset/depthbin/'
-#data_preprocess_root: '/data/dataset/NYU_dataset_preprocess'
-logdir: 'logdir'
+logdir: 'logdir/b3_F32_FixMultiview'
 
 ### training cfg
 max_epochs: 30 # 训练 epoch 数量
@@ -29,9 +26,9 @@ share_2d_backbone_gradient: true #true: save gpu memory, false: higher scores
 
 fp_loss: true
 frustum_size: 8
-batch_size_per_gpu: 1
-n_gpus: 1
-num_workers_per_gpu: 0
+batch_size_per_gpu: 16
+n_gpus: 3
+num_workers_per_gpu: 8
 exp_prefix: "sweeper_exp"
 run: 1
 lr: 2e-4

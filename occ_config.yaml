@@ -1,0 +1,99 @@
+input:
+  # 输入图片的文件夹路径
+  image_dir: "/home/bob/Lexar_SSD/OCC/OccData/sweeper_data/low/wood_floor/475+6207_sun"
+  # image_dir: "/home/bob/Lexar_SSD/OCC/OccData/sweeper_data/low/wood_floor/475+6207_sun/Test_data"
+  # 图片扩展名模式 (例如 *.jpg, *.png)
+  file_pattern: "*.jpg"
+
+model:
+  # 新增: 本地模型权重文件路径（.pt 或 .pth 文件）
+  local_checkpoint_path: "/home/bob/Lexar_SSD/sam3/sam3.pt"
+
+environment:
+  # Conda环境配置 - 不同阶段使用不同的环境
+  depth_env: "foundation_stereo"    # Stage 1: 深度估计使用的conda环境
+  semantic_env: "sam3"              # Stage 2: 语义分割使用的conda环境
+  # Stage 3 & 4 使用基础环境（numpy, open3d等）
+
+depth:
+  # FoundationStereo 模型检查点路径
+  ckpt_dir: "/home/bob/Lexar_SSD/FoundationStereo/23-51-11/model_best_bp2.pth"
+  # 图像缩放因子 (必须 <=1.0, 用于加速处理大图像)
+  scale: 1.0
+  # 最大深度值 (米)
+  max_depth: 1.0
+  # 推理迭代次数 (更多迭代=更精确但更慢)
+  valid_iters: 32
+  # 相机内参 - 焦距 (像素)
+  focal_length: 292.335297
+  # 立体基线 (米) - 左右相机之间的距离
+  baseline: 0.065155
+  # 相机内参矩阵 (fx, fy, cx, cy)
+  fx : 292.335297
+  fy : 292.335297
+  cx : 329.350525
+  cy : 238.175156
+  # 左右图像识别模式
+  left_pattern: "SLAM_SLAM_L_"   # 左目图像文件名包含的字符串
+  right_pattern: "SLAM_SLAM_R_"  # 右目图像文件名包含的字符串
+  # 点云生成选项
+  get_pc: 1                # 是否生成点云 (0=否, 1=是)
+  z_far: 5.0              # 点云最大深度裁剪
+  remove_invisible: 0      # 移除不可见点 (0=否, 1=是)
+  denoise_cloud: 0         # 去噪点云 (0=否, 1=是)
+  denoise_nb_points: 30    # 去噪时考虑的邻居点数
+  denoise_radius: 0.03     # 去噪半径
+
+output:
+  # 输出的基础目录
+  # base_dir: "/home/bob/Lexar_SSD/OCC/OccData/sweeper_data/low/wood_floor/475+6207_sun/Test_data"
+    base_dir: "/home/bob/Lexar_SSD/OCC/OccData/sweeper_data/low/wood_floor/475+6207_sun"
+
+semantic:
+  # 需要分割的目标类别 (Prompt)
+  categories:
+    - "floor"
+    - "wall"
+    - "chair"
+    - "table"
+    - "sofa"
+    - "cabinet"
+    - "bed"
+    - "wire"
+    - "shoe"
+    - "cloth"
+    - "trashcan"
+    - "charging dock"
+    - "fan"
+    - "human"
+    - "pet"
+    - "pet_waste"
+    - "liquid"
+    - "carpet"
+    - "plant"
+    - "Stain"
+    - "paper or tissue"
+    - "building blocks"
+  # 置信度阈值
+  threshold: 0.5
+
+occupancy:
+  # 体素网格范围 (米) - 在body坐标系下定义
+  x_range: [0.1, 0.9]   #  前后范围
+  y_range: [-0.4, 0.4]    # 左右范围
+  z_range: [-0.1, 0.38]    # 垂直范围
+  # 体素大小 (米)
+  voxel_size: 0.01      # 分辨率
+  # 占据状态定义:
+  # 0: FREE (空闲)
+  # 1-N: OCCUPIED with semantic label (被占据，带语义标签)
+  # 4: UNKNOWN (未知区域)
+  
+  # 左目相机外参 (camera_external) - 4x4变换矩阵（行优先） cam在body坐标系中的位置和姿态
+  # 将点从相机坐标系转换到body坐标系: P_body = T_body_to_camera * P_camera
+  camera_external: [
+    0.016072, -0.015371, 0.999753, 0.163700 ,
+    -0.999361, -0.032179, 0.015571, 0.032500 ,
+    0.031932, -0.999364, -0.015879, 0.062150,
+    0.0, 0.0, 0.0, 1.0
+  ]

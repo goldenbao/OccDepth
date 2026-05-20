@@ -155,7 +155,7 @@ class OccDepth(pl.LightningModule):
         elif self.dataset == "NYU":
             self.total_batch = (795 // batch_size) * 30
         elif self.dataset == "sweeper":
-            self.total_batch = (3000 // batch_size) * 30
+            self.total_batch = (3594 // batch_size) * 30
         else:
             raise NotImplementedError(self.dataset)
         self.cur_batch = 0
@@ -547,6 +547,21 @@ class OccDepth(pl.LightningModule):
         self.log(step_type + "/loss", loss.detach(), on_epoch=True, sync_dist=True)
 
         return loss
+    
+    # ------------------ 🎯 新增的动态步数校准钩子 ------------------
+    def on_train_start(self):
+            """在正式训练开始的前一秒触发，此时训练集 DataLoader 已经加载完毕，数据最准"""
+            steps_per_epoch = self.trainer.num_training_batches
+            max_epochs = self.trainer.max_epochs
+            
+            # 动态校准总步数
+            self.total_batch = int(steps_per_epoch * max_epochs)
+            
+            # 🎯 强行将计步器归零，消除 Validation sanity check 带来的潜在干扰
+            self.cur_batch = 0
+            
+            print(f"\n🚀 [DDP Precision] Detected steps_per_epoch={steps_per_epoch}, max_epochs={max_epochs}")
+            print(f"🎯 [Dynamic Success] self.total_batch has been recalibrated to: {self.total_batch}\n")
 
     def training_step(self, batch, batch_idx):
         self.cur_batch += 1
