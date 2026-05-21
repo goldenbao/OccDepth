@@ -26,15 +26,21 @@ share_2d_backbone_gradient: true #true: save gpu memory, false: higher scores
 
 fp_loss: true
 frustum_size: 8
-batch_size_per_gpu: 16
-n_gpus: 3
-num_workers_per_gpu: 8
+
+# batch_size_per_gpu: 16
+# n_gpus: 3
+# num_workers_per_gpu: 8
+
+batch_size_per_gpu: 1
+n_gpus: 1
+num_workers_per_gpu: 0
+
 exp_prefix: "sweeper_exp"
 run: 1
 lr: 2e-4
 weight_decay: 1e-4
 
-context_prior: false # crp loss
+context_prior: true # crp loss
 
 relation_loss: true
 CE_ssc_loss: true

@@ -132,10 +132,9 @@ class SwepperDataset(Dataset):
         self.label_root = os.path.join(preprocess_root, "labels")
         self.n_classes = 24  # 语义的种类 free + 各种label 不包括unknown（遮挡）
         splits = {
-            # "train": ["475+6207_sun"],
-             "train": ["475+6207_sun/train"],
-            "val": ["475+6207_sun/test"],
-            "test":["475+6207_sun/test"],
+            "train": ["train"],
+            "val": ["test"],
+            "test":["test"],
         }
         self.split = split
         self.sequences = splits[split]
@@ -189,7 +188,7 @@ class SwepperDataset(Dataset):
         for sequence in self.sequences:
             
             # swepper para read
-            config_path = "/home/project/occgtgen/config/occ_config.yaml"
+            config_path = "/home/project/OccDepth/occ_config.yaml"
             T_velo_2_cam, proj_matrix, cam_k = get_sweeper_calib(config_path)
             
             P = [cam_k]
@@ -220,7 +219,7 @@ class SwepperDataset(Dataset):
             # endregion
             
             glob_path = os.path.join(
-                self.root, sequence, "occupancy_gt", "*.npy"
+                self.root, sequence, "occupancy_gt", "*occ_gt.npy"
             )
             for voxel_path in glob.glob(glob_path):
                 self.scans.append(
@@ -357,15 +356,15 @@ class SwepperDataset(Dataset):
             # see in `occdepth/data/semantic_kitti/semantic-kitti` learning_map
             data["target"] = target
             
-            # 先不准备下采样的数据
-            # target_8_path = os.path.join(
-            #     self.label_root, sequence, frame_id + "_1_8.npy"
-            # )
-            # target_1_8 = np.load(target_8_path)
+            # 下采样 计算交叉熵
+            target_4_path = os.path.join(
+                self.root, sequence, "occupancy_gt", "SLAM_SLAM_L_"+ frame_id+"_occ_gt_1_4.npy"
+            )
+            target_1_4 = np.load(target_4_path)
 
-            # # compute supervoxel -> voxel attention matrix(4, HWD, H/2 W/2 D/2)
-            # CP_mega_matrix = compute_CP_mega_matrix(target_1_8)
-            # data["CP_mega_matrix"] = CP_mega_matrix
+            # compute supervoxel -> voxel attention matrix(4, HWD, H/2 W/2 D/2)
+            CP_mega_matrix = compute_CP_mega_matrix(target_1_4)
+            data["CP_mega_matrix"] = CP_mega_matrix
 
         if self.with_occluded:
             occluded_path = os.path.join(
@@ -409,7 +408,7 @@ class SwepperDataset(Dataset):
                     "depth_maps",
                     "SLAM_SLAM_L_"+ frame_id + "_depth_meter.npy",
                 )
-                gt_depth=np.load(stereo_depth_path) #深度图好像没有拿来监督训练，只是单目情况下用来生成虚拟右图 ?
+                gt_depth=np.load(stereo_depth_path) 
                 # gt_depth = load_depth(stereo_depth_path) 
                 gt_depth = [gt_depth[: self.img_H, : self.img_W]]  # crop depth
             elif self.use_lidar_depth_gt:

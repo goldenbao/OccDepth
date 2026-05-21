@@ -90,7 +90,6 @@ def main(config: DictConfig):
             use_stereo_depth_gt=config.use_stereo_depth_gt,
             use_lidar_depth_gt=config.use_lidar_depth_gt,
             data_stereo_depth_root=config.data_stereo_depth_root,
-            data_lidar_depth_root=config.data_lidar_depth_root,
             occluded_cls=config.occluded_cls,
             use_strong_img_aug=config.use_strong_img_aug,
         )

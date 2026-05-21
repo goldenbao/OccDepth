@@ -3,9 +3,57 @@ import shutil
 import random
 import re
 from pathlib import Path
+import glob
+import numpy as np
+from tqdm import tqdm
+from occdepth.data.NYU.preprocess import _downsample_label
+
+def batch_process(target_dir):
+    # 🎯 指定目标目录
+   
+    # 获取目录下所有的 .npy 文件，但排除掉已经是 _1_4 的文件
+    all_files = glob.glob(os.path.join(target_dir, "*.npy"))
+    npy_files = [f for f in all_files if not f.endswith("_1_4.npy")]
+    
+    print(f"🚀 找到待处理的原始体素文件共: {len(npy_files)} 个")
+    
+    # 开始循环处理，带进度条
+    for file_path in tqdm(npy_files, desc="Processing Voxel Downsampling"):
+        # 拆分文件名和后缀
+        file_dir, file_name = os.path.split(file_path)
+        name_without_ext, ext = os.path.splitext(file_name)
+        
+        # 拼接出新的文件名，例如: xxx_1_4.npy
+        new_file_name = f"{name_without_ext}_1_4{ext}"
+        new_file_path = os.path.join(file_dir, new_file_name)
+        
+        # ⚡️ 检查是否已经存在处理好的文件，存在则直接跳过（方便断点续传）
+        if os.path.exists(new_file_path):
+            continue
+            
+        try:
+            # 1. 读取原始数据
+            voxel_gt = np.load(file_path)
+            
+            # 获取当前体素的实际 shape 作为函数的输入尺寸参数
+            current_shape = voxel_gt.shape
+            
+            # 2. 执行下采样
+            voxel_downsampled = _downsample_label(
+                label=voxel_gt, 
+                voxel_size=current_shape, 
+                downscale=4
+            )
+            
+            # 3. 保存新文件
+            np.save(new_file_path, voxel_downsampled)
+            
+        except Exception as e:
+            print(f"\n❌ 处理文件时发生错误 {file_name}: {str(e)}")
+
 
 # ==================== 配置路径 ====================
-BASE_DIR = Path("/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun")
+BASE_DIR = Path("/home/data/Occ_stereo")
 
 # 源文件夹路径
 SRC_OCC = BASE_DIR / "occupancy_gt"
@@ -98,5 +146,12 @@ def split_dataset():
         print(f"✨ {mode} 集合处理完毕！成功拷贝: {copied_count} 帧" + (f"，因文件不全跳过: {missing_count} 帧" if missing_count > 0 else ""))
 
 if __name__ == "__main__":
-    split_dataset()
-    print("\n🎉 数据集完美划分并对齐拷贝完成！")
+    # split_dataset()
+    # print("\n🎉 数据集完美划分并对齐拷贝完成！")
+    
+        #下采样 target
+    
+    target_dir = "/home/data/Occ_stereo/test/occupancy_gt"
+    batch_process(target_dir)
+    print("🏁 所有文件下采样处理完成！")
+    
