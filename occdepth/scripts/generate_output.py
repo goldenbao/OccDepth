@@ -3,6 +3,8 @@ from occdepth.models.OccDepth import OccDepth
 from occdepth.data.NYU.nyu_dm import NYUDataModule
 from occdepth.data.semantic_kitti.kitti_dm import KittiDataModule
 from occdepth.data.tartanair.tartanair_dm import TartanAirDataModule
+from occdepth.data.sweeper.sweeper_dm import SweeperDataModule
+
 import hydra
 from omegaconf import DictConfig
 import torch
@@ -26,6 +28,22 @@ def main(config: DictConfig):
     load_strict = True
 
     # Setup dataloader
+    if config.dataset == "sweeper":
+        full_scene_size = tuple(config.full_scene_size)
+        data_module = SweeperDataModule(
+            root=config.data_root,
+            preprocess_root=config.data_preprocess_root,
+            frustum_size=config.frustum_size,
+            batch_size=int(config.batch_size_per_gpu),
+            num_workers=int(config.num_workers_per_gpu * config.n_gpus),
+            pattern_id=config.pattern_id,
+            multi_view_mode=config.multi_view_mode,
+            use_stereo_depth_gt=config.use_stereo_depth_gt,
+            use_lidar_depth_gt=config.use_lidar_depth_gt,
+            data_stereo_depth_root=config.data_stereo_depth_root,
+        )
+        data_module.setup()
+        data_loader = data_module.val_dataloader()
     if config.dataset == "kitti":
         full_scene_size = tuple(config.full_scene_size)
         data_module = KittiDataModule(
@@ -100,7 +118,17 @@ def main(config: DictConfig):
                         batch["target"][i].detach().cpu().numpy().astype(np.uint16)
                     )
 
-                if config.dataset == "NYU":
+                if config.dataset == "sweeper":
+                    write_path = os.path.join(output_path, batch["sequence"][i])
+                    filepath = os.path.join(write_path, batch["frame_id"][i] + ".pkl")
+                    out_dict["fov_mask_1"] = (
+                        batch["fov_mask_1"][i].detach().cpu().numpy()
+                    )
+                    out_dict["cam_k"] = batch["cam_k"][i].detach().cpu().numpy()
+                    out_dict["T_velo_2_cam"] = (
+                        batch["T_velo_2_cam"][i].detach().cpu().numpy()
+                    )
+                elif config.dataset == "NYU":
                     write_path = output_path
                     filepath = os.path.join(write_path, batch["name"][i] + ".pkl")
                     out_dict["cam_pose"] = batch["cam_pose"][i].detach().cpu().numpy()
