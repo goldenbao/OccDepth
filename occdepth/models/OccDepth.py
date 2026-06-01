@@ -25,6 +25,13 @@ from occdepth.loss.depth_loss import DepthClsLoss
 # PCA
 from sklearn.decomposition import PCA
 
+# IGEV-RR
+from occdepth.models.igev_rr_wrapper import IGEVRRWrapper
+
+# f2v
+from occdepth.models.f2v.frustum_grid_generator import FrustumGridGenerator
+from occdepth.models.f2v.sampler import Sampler
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -73,6 +80,10 @@ class OccDepth(pl.LightningModule):
         self.cascade_cls = config.cascade_cls
         self.occluded_cls = config.occluded_cls
         self.sem_step_decay_loss = config.sem_step_decay_loss
+
+        # igev_rr config
+        self.igev_rr_ckpt = getattr(config, "igev_rr_ckpt", "")
+        self.igev_rr_max_disp = getattr(config, "igev_rr_max_disp", 192)
 
         # multi_view_mode
         self.multi_view_mode = config.multi_view_mode
@@ -226,6 +237,66 @@ class OccDepth(pl.LightningModule):
                     downsample_factor=self.flosp_depth_conf["downsample_factor"],
                     d_bound=self.flosp_depth_conf["d_bound"],
                 )
+        elif self.trans_2d_to_3d == "igev_rr_depth":
+            # IGEV-RR depth-aware: SFA geometric projection + frozen IGEV-RR depth.
+            # IGEV-RR computes disparity from the stereo pair, which is converted
+            # to a depth-bin distribution and sampled into the voxel grid.
+            self.projects = {}
+            self.scale_2ds = [1, 2, 4, 8]
+            for scale_2d in self.scale_2ds:
+                self.projects[str(scale_2d)] = SFA(
+                    config.full_scene_size,
+                    project_scale=self.project_scale,
+                    dataset=self.dataset,
+                )
+            self.projects = nn.ModuleDict(self.projects)
+
+            # IGEV-RR frozen stereo model
+            self.igev_rr = IGEVRRWrapper(
+                ckpt_path=self.igev_rr_ckpt,
+                max_disp=self.igev_rr_max_disp,
+            )
+
+            # Grid generator + sampler for depth-to-voxel sampling
+            # (reuses the same geometry as FlospDepth would)
+            self.flosp_depth_conf = flosp_depth_conf_map[self.dataset]
+            self.flosp_depth_conf.update(
+                {
+                    "scene_size": config.full_scene_size,
+                    "project_scale": config.project_scale,
+                    "output_channels": config.feature,
+                    "return_depth": False,
+                    "infer_mode": self.infer_mode,
+                }
+            )
+            _fc = self.flosp_depth_conf
+            d_bound = _fc["d_bound"]
+            depth_channels = int((d_bound[1] - d_bound[0]) / d_bound[2])
+
+            grid_size = torch.LongTensor(
+                [
+                    (row[1] - row[0]) / row[2] / self.project_scale
+                    for row in [_fc["x_bound"], _fc["y_bound"], _fc["z_bound"]]
+                ]
+            )
+            pc_range = [
+                _fc["x_bound"][0],
+                _fc["y_bound"][0],
+                _fc["z_bound"][0],
+                _fc["x_bound"][1],
+                _fc["y_bound"][1],
+                _fc["z_bound"][1],
+            ]
+            disc_cfg = {
+                "mode": "LID",
+                "num_bins": depth_channels,
+                "depth_min": d_bound[0],
+                "depth_max": d_bound[1],
+            }
+            self.igev_grid_generator = FrustumGridGenerator(
+                grid_size=grid_size, pc_range=pc_range, disc_cfg=disc_cfg
+            )
+            self.igev_sampler = Sampler(mode="bilinear", padding_mode="zeros")
         else:
             raise NotImplementedError(f"{self.trans_2d_to_3d} is not supported yet.")
 
@@ -285,7 +356,7 @@ class OccDepth(pl.LightningModule):
     
     def _forward_2d_to_3d(self, batch, x_rgb, img, bs, vox_origin):
         depth_pred = None
-        if self.trans_2d_to_3d in ["flosp", "flosp_depth"]:
+        if self.trans_2d_to_3d in ["flosp", "flosp_depth", "igev_rr_depth"]:
             x3ds_ori = []
             for i in range(bs):
                 x3d = None
@@ -364,9 +435,115 @@ class OccDepth(pl.LightningModule):
                 # x3ds_depth provides a soft per-voxel weight based on learned depth distribution,
                 # and the factor 100 amplifies the depth signal to match the scale of SFA features.
                 x3ds = x3ds * x3ds_depth * 100
+            elif self.trans_2d_to_3d == "igev_rr_depth":
+                # IGEV-RR depth: run frozen IGEV-RR on the stereo pair,
+                # convert disparity → depth → LID bin distribution,
+                # sample into voxel space via grid_generator + sampler.
+                n_views = len(x_rgb)
+                x3ds_depth = self._forward_igev_rr_depth(batch, n_views)
+                x3ds = x3ds * x3ds_depth * 100
         else:
             raise NotImplementedError(f"{self.trans_2d_to_3d} is not supported yet.")
         return x3ds, depth_pred
+
+    def _forward_igev_rr_depth(self, batch, n_views):
+        """Compute per-voxel depth weight using frozen IGEV-RR.
+
+        Returns:
+            x3ds_depth (B, 1, X, Y, Z): per-voxel weight from depth.
+        """
+        if n_views < 2:
+            raise RuntimeError(
+                "igev_rr_depth requires multi_view_mode=True "
+                f"(n_views={n_views}) for stereo input."
+            )
+
+        bs = batch["img"].shape[0]
+        dev = batch["img"].device
+
+        # ---- 1. Denormalise images from ImageNet norm back to [0, 255] ----
+        left = batch["img"][:, 0]                     # (B, 3, H, W)
+        right = batch["img"][:, 1]
+        _mean = torch.tensor([0.485, 0.456, 0.406], device=dev).reshape(1, 3, 1, 1)
+        _std = torch.tensor([0.229, 0.224, 0.225], device=dev).reshape(1, 3, 1, 1)
+        left_255 = ((left * _std + _mean).clamp(0, 1)) * 255.0
+        right_255 = ((right * _std + _mean).clamp(0, 1)) * 255.0
+
+        # ---- 2. IGEV-RR disparity ----
+        igev_out = self.igev_rr(left_255, right_255)
+        disp = igev_out["disp_pred"]                  # (B, H, W)
+
+        # ---- 3. Disparity → depth from camera params in batch ----
+        cam_k = torch.stack(batch["cam_k"]).float()             # (B, n_views, 3, 3)
+        T_velo_2_cam = torch.stack(batch["T_velo_2_cam"]).float()  # (B, n_views, 4, 4)
+        # Both views share intrinsics in a rectified stereo pair
+        fx = cam_k[:, 0, 0, 0]                                  # (B,)
+        # Baseline = physical distance between left/right camera centers
+        pos_left = T_velo_2_cam[:, 0, :3, 3]                    # (B, 3)
+        pos_right = T_velo_2_cam[:, 1, :3, 3]                   # (B, 3)
+        baseline = torch.norm(pos_left - pos_right, dim=1)      # (B,)
+        depth = fx.view(-1, 1, 1) * baseline.view(-1, 1, 1) / (disp + 1e-6)
+        depth = depth.clamp(0.1, 0.9)
+
+        # ---- 4. Depth → 80-bin LID distribution at 1/8 resolution ----
+        d_min, d_max = 0.1, 0.9
+        num_bins = 80
+        _, H, W = depth.shape
+
+        bin_size = 2 * (d_max - d_min) / (num_bins * (1 + num_bins))
+        indices = -0.5 + 0.5 * torch.sqrt(
+            1 + 8 * (depth - d_min) / bin_size
+        )
+        indices = indices.clamp(0, num_bins - 1).long()
+
+        depth_1h = torch.zeros(bs, num_bins, H, W, device=dev)
+        depth_1h.scatter_(1, indices.unsqueeze(1), 1.0)   # (B, 80, H, W)
+
+        # Average-pool to 1/8 resolution → each 8×8 tile gives a soft
+        # histogram over the 80 depth bins.
+        depth_dist = F.avg_pool2d(depth_1h, kernel_size=8, stride=8)
+        depth_dist = depth_dist / depth_dist.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        # (B, 80, H/8, W/8) = (B, 80, 60, 80)
+
+        # ---- 5. Sample depth distribution into voxel space ----
+        depth_dist = depth_dist.unsqueeze(1)               # (B, 1, 80, 60, 80)
+
+        final_dim = self.flosp_depth_conf["final_dim"]     # (H, W) = (480, 640)
+        image_shape = torch.tensor([final_dim], device=dev).float().repeat(bs, 1)
+        ida_mats = torch.stack(batch["ida_mats"]).float()  # (B, n_views, 4, 4)
+
+        all_vf = []
+        for i in range(n_views):
+            # Build (B, 3, 4) camera-to-image matrix [K | 0]
+            c2i = torch.zeros(bs, 3, 4, device=dev, dtype=cam_k.dtype)
+            c2i[:, :3, :3] = cam_k[:, i]
+
+            grid = self.igev_grid_generator(
+                lidar_to_cam=T_velo_2_cam[:, i],
+                cam_to_img=c2i,
+                ida_mats=ida_mats[:, i],
+                image_shape=image_shape,
+            )                                              # (B, X, Y, Z, 3)
+
+            vf = self.igev_sampler(
+                input_features=depth_dist, grid=grid
+            )                                              # (B, 1, X, Y, Z)
+            all_vf.append(vf)
+
+        # Mean aggregation across views (accounting for co-visibility)
+        if n_views == 1:
+            x3ds_depth = all_vf[0]
+        else:
+            masks = None
+            for vf in all_vf:
+                if masks is None:
+                    masks = (vf > 0).float()
+                else:
+                    masks = masks + (vf > 0).float()
+            x3ds_depth = sum(all_vf)
+            x3ds_depth[masks > 0] = x3ds_depth[masks > 0] / masks[masks > 0]
+
+        return x3ds_depth                                   # (B, 1, X, Y, Z)
 
     def forward(self, batch):
         """

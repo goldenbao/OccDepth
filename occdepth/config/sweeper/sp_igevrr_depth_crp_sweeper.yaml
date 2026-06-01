@@ -1,0 +1,75 @@
+### dataset
+#dataset: "NYU" # "kitti", "tartanair"
+dataset: "sweeper"
+
+n_relations: 4
+
+enable_log: true
+data_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+data_preprocess_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+data_stereo_depth_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+
+logdir: 'logdir/b3_F32_IGEVRR'
+
+### training cfg
+max_epochs: 30 # 训练 epoch 数量
+gradient_clip_val: 35 # gradient clip val (0 FOR w/o gradient clip)
+use_stereo_depth_gt: false # not used in igev_rr_depth mode
+use_lidar_depth_gt: false
+use_depth_gt: false
+depth_loss_weight: 0.0
+deterministic: false
+use_strong_img_aug: false
+sem_step_decay_loss: false
+
+share_2d_backbone_gradient: true
+
+fp_loss: true
+frustum_size: 8
+
+batch_size_per_gpu: 1
+n_gpus: 1
+num_workers_per_gpu: 0
+
+exp_prefix: "sweeper_exp"
+run: 1
+lr: 2e-4
+weight_decay: 1e-4
+
+context_prior: true
+relation_loss: true
+CE_ssc_loss: true
+sem_scal_loss: true
+geo_scal_loss: true
+
+project_1_2: true
+project_1_4: true
+project_1_8: true
+
+ckpt: ''
+
+### MultiView
+multi_view_mode: true # stereo pair required for IGEV-RR
+pattern_id: 0
+
+### network config
+full_scene_size:
+  - 80
+  - 80
+  - 48
+project_scale: 2
+feature: 32
+feature_2d_oc: 32
+n_classes: 24
+backbone_2d_name: 'tf_efficientnet_b3_ns'
+return_up_feats: 1
+cascade_cls: true
+occluded_cls: false
+
+### 2d->3d transformation
+trans_2d_to_3d_debug: false
+trans_2d_to_3d: "igev_rr_depth" # "flosp", "flosp_depth", "igev_rr_depth"
+
+### IGEV-RR config
+igev_rr_ckpt: '/home/data/bino_stereo/binocularstereovision/scratch_igev_rr_except_mn2_on_sceneflow_w_aug/ckpt/igev_rr_260520_1948_ep56_neice9_123657.pth'
+igev_rr_max_disp: 192
