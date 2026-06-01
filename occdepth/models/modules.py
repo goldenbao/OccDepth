@@ -256,6 +256,11 @@ class ProcessKitti(nn.Module):
 
 
 class Process(nn.Module):
+    """
+    3 sequential Bottleneck3D blocks with increasing dilation [1, 2, 3].
+    Each block uses bottleneck ratio 4 (feature -> feature//4 -> feature).
+    Growing dilation enlarges receptive field without resolution loss.
+    """
     def __init__(self, feature, norm_layer, bn_momentum, dilations=[1, 2, 3]):
         super(Process, self).__init__()
         self.main = nn.Sequential(
@@ -318,6 +323,10 @@ class Convblock3d(nn.Module):
 
 
 class Downsample(nn.Module):
+    """
+    Bottleneck3D with stride=2 and AvgPool+Conv skip connection.
+    Doubles channel dimension (expansion=8 => feature*8/4 = feature*2).
+    """
     def __init__(self, feature, norm_layer, bn_momentum, expansion=8):
         super(Downsample, self).__init__()
         self.main = Bottleneck3D(

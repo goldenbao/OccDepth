@@ -197,6 +197,11 @@ class Encoder(nn.Module):
 
 
 class UNet2D(nn.Module):
+    """  用于分割任务
+    EfficientNet-B3 encoder + lightweight decoder for multi-scale 2D features.
+    Outputs feature maps at scales 1, 1/2, 1/4, 1/8, 1/16 for multi-scale
+    2D-to-3D projection (see SFA).
+    """
     def __init__(
         self,
         backend,

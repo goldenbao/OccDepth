@@ -29,6 +29,11 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class OccDepth(pl.LightningModule):
+    """
+    Top-level LightningModule orchestrating the full SSC pipeline:
+    UNet2D (multi-scale 2D features) -> SFA (+ optional FlospDepth) (2D->3D projection)
+    -> UNet3D (3D encoder-decoder for semantic occupancy).
+    """
     def __init__(
         self,
         class_names,
@@ -174,6 +179,8 @@ class OccDepth(pl.LightningModule):
         )
 
         if self.trans_2d_to_3d == "flosp":
+            # Geometric-only: SFA projects 2D features into 3D voxel space
+            # using pre-computed frustum pixel indices (no learned parameters)
             self.projects = {}
             self.scale_2ds = [1, 2, 4, 8]  # 2D scales
             for scale_2d in self.scale_2ds:
@@ -185,6 +192,8 @@ class OccDepth(pl.LightningModule):
 
             self.projects = nn.ModuleDict(self.projects)
         elif self.trans_2d_to_3d == "flosp_depth":
+            # Depth-aware: SFA geometric projection + FlospDepth learned depth weighting.
+            # The final 3D features are SFA(x) * FlospDepth(x) * 100 (see forward).
             self.projects = {}
             self.scale_2ds = [1, 2, 4, 8]  # 2D scales
             for scale_2d in self.scale_2ds:
@@ -351,12 +360,20 @@ class OccDepth(pl.LightningModule):
                     # TODO, more general way to avoid this operation
                     x3ds_depth = x3ds_depth.permute(0, 1, 2, 4, 3).contiguous()
 
+                # Fuse geometric projection (SFA) with depth-aware attention (FlospDepth).
+                # x3ds_depth provides a soft per-voxel weight based on learned depth distribution,
+                # and the factor 100 amplifies the depth signal to match the scale of SFA features.
                 x3ds = x3ds * x3ds_depth * 100
         else:
             raise NotImplementedError(f"{self.trans_2d_to_3d} is not supported yet.")
         return x3ds, depth_pred
 
     def forward(self, batch):
+        """
+        Pipeline: process_rgbs (UNet2D multi-scale features)
+        -> _forward_2d_to_3d (SFA + optional FlospDepth projection)
+        -> net_3d_decoder (UNet3D semantic occupancy)
+        """
         img = batch["img"].to(device)
         bs, n_views, c, h, w = img.shape
         out = {}

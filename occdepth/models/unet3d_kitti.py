@@ -12,6 +12,13 @@ from occdepth.models.modules import Process, Upsample, Downsample, Convblock3d
 
 
 class UNet3D(nn.Module):
+    """
+    3-level encoder-decoder for KITTI (256x256x32 scene, project_scale=2).
+    Encoder: Process + Downsample x2 (l1 -> l2 -> l3).
+    Decoder: Upsample + skip connections (l3 -> l2 -> l1 -> full).
+    Optional CRP (Context Relation Prior) module at the bottleneck (l3).
+    Optional cascade/occluded classification heads.
+    """
     def __init__(
         self,
         class_num,

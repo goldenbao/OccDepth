@@ -322,6 +322,12 @@ class PCFE(nn.Module):
 
 
 class FlospDepth(nn.Module):
+    """
+    Depth-aware 3D feature lifting. Predicts a depth distribution via DepthNet,
+    then samples the depth-weighted frustum volume into the voxel grid.
+    The output is multiplied with SFA's geometric projection features
+    (see OccDepth._forward_2d_to_3d: x3ds = x3ds * x3ds_depth * 100).
+    """
     def __init__(
         self,
         x_bound,

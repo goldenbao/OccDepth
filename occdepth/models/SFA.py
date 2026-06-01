@@ -3,6 +3,12 @@ import torch.nn as nn
 
 
 class SFA(nn.Module):
+    """
+    Stereo Soft Feature Assignment (no learned parameters).
+    Projects 2D features into 3D voxel space using pre-computed frustum pixel indices.
+    Multi-view fusion uses cosine-similarity weighting: shared-view voxels are weighted
+    by feature similarity, while single-view voxels get a boost.
+    """
     def __init__(self, scene_size, dataset, project_scale):
         super().__init__()
         self.scene_size = scene_size
@@ -12,6 +18,8 @@ class SFA(nn.Module):
     def forward(self, x2d, projected_pix, fov_mask):
         n_views, c, h, w = x2d.shape
 
+        # Gather per-view features at projected pixel locations, with average pooling
+        # over multiple projection patterns and zero-filling for out-of-FOV voxels.
         src_feature = []
         n_views_weights = []
         for idx in range(n_views):
@@ -42,11 +50,14 @@ class SFA(nn.Module):
             src_feature.append(sub_src_feature)
             n_views_weights.append(sub_weights)
 
-        # get the mean feature of multi views for each projected pixs
+        # Multi-view fusion: each voxel's feature is a cosine-similarity-weighted average
+        # across all view pairs. Voxels visible in only one view get a unit weight boost
+        # to avoid attenuation from zero-paired terms.
         n_views_weights = torch.stack(n_views_weights)
         cos_weight = torch.zeros(n_views, n_views, projected_pix.shape[1]).type_as(x2d)
         src_feature = torch.stack(src_feature)
         sum_wheight_feature = torch.zeros(c, projected_pix.shape[1]).type_as(x2d)
+        sum_norm = torch.zeros(projected_pix.shape[1]).type_as(x2d)
         for idx_i in range(n_views):
             for idx_j in range(idx_i + 1, n_views):
                 cos_weight_clone = cos_weight.clone()
@@ -69,21 +80,26 @@ class SFA(nn.Module):
                 cos_weight_single =torch.cosine_similarity(src_feature[idx_i],src_feature[idx_j],0)*weight_ij
                 cos_weight_clone[idx_i,idx_j] = cos_weight_single + weight_i_vec
                 cos_weight_clone[idx_j,idx_i] = cos_weight_single + weight_j_vec
-                # cos_weight_clone[idx_i, idx_j] = (
-                #     torch.cosine_similarity(src_feature[idx_i], src_feature[idx_j], 0)
-                #     * weight_ij
-                # )
-                # cos_weight_clone[idx_i, idx_j] = cos_weight_clone[idx_i, idx_j] + weight_i_vec
-                # cos_weight_clone[idx_j, idx_i] = cos_weight_clone[idx_i, idx_j] + weight_j_vec
 
                 sum_wheight_feature += (
                     cos_weight_clone[idx_i, idx_j] * src_feature[idx_i]
                     + cos_weight_clone[idx_j, idx_i] * src_feature[idx_j]
                 )
+                # Count non-zero weight directions (not sum of weights), so that:
+                # co-visible voxels divide by 2 (keep cos_sim in numerator),
+                # single-view voxels divide by 1 (retain full feature strength).
+                sum_norm += (cos_weight_clone[idx_i, idx_j] > 0).float() \
+                          + (cos_weight_clone[idx_j, idx_i] > 0).float()
+
         if(n_views > 1):
-            sum_wheight_feature = sum_wheight_feature / (
-                n_views * (n_views - 1)
-            )  # n_views is greater than 1
+            sum_norm = torch.where(
+                sum_norm > 0, sum_norm, torch.ones_like(sum_norm)
+            )
+            sum_wheight_feature = sum_wheight_feature / sum_norm
+            
+            # sum_wheight_feature = sum_wheight_feature / (
+            #     n_views * (n_views - 1)
+            # )  # n_views is greater than 1
         else:
             sum_wheight_feature = src_feature[0]
         src_feature = sum_wheight_feature
