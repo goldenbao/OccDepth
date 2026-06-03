@@ -483,28 +483,27 @@ class OccDepth(pl.LightningModule):
         pos_right = T_velo_2_cam[:, 1, :3, 3]                   # (B, 3)
         baseline = torch.norm(pos_left - pos_right, dim=1)      # (B,)
         depth = fx.view(-1, 1, 1) * baseline.view(-1, 1, 1) / (disp + 1e-6)
+        depth = depth.clamp(0.1, 0.9)
 
-        # ---- 4. Depth → soft histogram at 1/8 resolution ----
+        # ---- 4. Depth → 80-bin LID distribution at 1/8 resolution ----
         d_min, d_max = 0.1, 0.9
         num_bins = 80
         _, H, W = depth.shape
 
-        # Valid mask: only pixels within the voxel depth range
-        valid_mask = (depth >= d_min) & (depth <= d_max)
-
-        # LID bin index (clamp depth for sqrt safety only)
         bin_size = 2 * (d_max - d_min) / (num_bins * (1 + num_bins))
         indices = -0.5 + 0.5 * torch.sqrt(
-            1 + 8 * (depth.clamp(d_min, d_max) - d_min) / bin_size
+            1 + 8 * (depth - d_min) / bin_size
         )
         indices = indices.clamp(0, num_bins - 1).long()
 
-        # One-hot: out-of-range pixels contribute 0 to every bin
         depth_1h = torch.zeros(bs, num_bins, H, W, device=dev)
-        depth_1h.scatter_(1, indices.unsqueeze(1), valid_mask.unsqueeze(1).float())
+        depth_1h.scatter_(1, indices.unsqueeze(1), 1.0)   # (B, 80, H, W)
 
-        # Avg-pool → tiles with few valid pixels sum proportionally lower
+        # Average-pool to 1/8 resolution → each 8×8 tile gives a soft
+        # histogram over the 80 depth bins.
         depth_dist = F.avg_pool2d(depth_1h, kernel_size=8, stride=8)
+        depth_dist = depth_dist / depth_dist.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        # (B, 80, H/8, W/8) = (B, 80, 60, 80)
 
         # ---- 5. Sample depth distribution into voxel space ----
         depth_dist = depth_dist.unsqueeze(1)               # (B, 1, 80, 60, 80)
