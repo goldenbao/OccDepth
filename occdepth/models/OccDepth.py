@@ -85,6 +85,9 @@ class OccDepth(pl.LightningModule):
         self.igev_rr_ckpt = getattr(config, "igev_rr_ckpt", "")
         self.igev_rr_max_disp = getattr(config, "igev_rr_max_disp", 192)
 
+        # debug visualization toggle
+        self.debug_viz = getattr(config, "debug_viz", False)
+
         # multi_view_mode
         self.multi_view_mode = config.multi_view_mode
         self.share_2d_backbone_gradient = config.share_2d_backbone_gradient
@@ -485,6 +488,33 @@ class OccDepth(pl.LightningModule):
         depth = fx.view(-1, 1, 1) * baseline.view(-1, 1, 1) / (disp + 1e-6)
         depth = depth.clamp(0.1, 0.9)
 
+        if self.debug_viz:
+            #region Save depth as interactive HTML for debugging
+            if not depth.is_cuda or (hasattr(self, 'depth_html_saved') and self.depth_html_saved):
+                pass
+            else:
+                try:
+                    import plotly.express as px
+                    import numpy as np
+                    d_np = depth[0].detach().cpu().numpy()
+                    fig = px.imshow(d_np, zmin=0.1, zmax=0.9, color_continuous_scale='jet',
+                                    title='IGEV-RR Depth (0.1-0.9m)')
+                    fig.update_layout(coloraxis_colorbar_title='Depth (m)')
+                    fig.write_html('/home/project/OccDepth/output/depth_interactive.html')
+                    self.depth_html_saved = True
+                    print(f"[igev_rr_depth] Saved interactive depth HTML: {d_np.shape}")
+                except Exception as e:
+                    print(f"[igev_rr_depth] Failed to save depth HTML: {e}")
+            #endregion
+
+        # ---- 3.5 Mask out black-border pixels so they contribute zero depth vote ----
+        # After undistortion, ~9% of edge pixels are invalid black border with garbage disp.
+        # Zeroing their one-hot ensures they never affect the depth histogram.
+        invalid_mask = torch.zeros_like(depth, dtype=torch.bool)   # (B, H, W)
+        invalid_mask[:, 0:18, :] = True
+        invalid_mask[:, 461:, :] = True
+        invalid_mask[:, :, 629:] = True
+
         # ---- 4. Depth → 80-bin LID distribution at 1/8 resolution ----
         d_min, d_max = 0.1, 0.9
         num_bins = 80
@@ -494,10 +524,48 @@ class OccDepth(pl.LightningModule):
         indices = -0.5 + 0.5 * torch.sqrt(
             1 + 8 * (depth - d_min) / bin_size
         )
-        indices = indices.clamp(0, num_bins - 1).long()
+        # indices = indices.clamp(0, num_bins - 1).long()
+        indices = indices.clamp(0, num_bins - 1)                # (B, H, W), float
+
+        # Bilinear interpolation between neighbouring bins instead of hard one-hot.
+        # One-hot causes voxel depth-weight to be ≈0 when the voxel's LID bin
+        # doesn't exactly match the measured depth (sub-pixel misalignment).
+        # Spreading each vote across 2 bins gives nearby voxels non-zero weight.
+        idx_lo = indices.floor().long()
+        idx_hi = (idx_lo + 1).clamp(0, num_bins - 1)
+        w_hi = (indices - idx_lo.float()).unsqueeze(1)          # (B, 1, H, W)
+        w_lo = 1 - w_hi
 
         depth_1h = torch.zeros(bs, num_bins, H, W, device=dev)
-        depth_1h.scatter_(1, indices.unsqueeze(1), 1.0)   # (B, 80, H, W)
+        # depth_1h.scatter_(1, indices.unsqueeze(1), 1.0)   # (B, 80, H, W)
+        depth_1h.scatter_add_(1, idx_lo.unsqueeze(1), w_lo)
+        depth_1h.scatter_add_(1, idx_hi.unsqueeze(1), w_hi)
+        
+        # Zero out black-border pixels so they cast no vote in any bin
+        depth_1h = depth_1h * (~invalid_mask).float().unsqueeze(1)
+                                                                     
+        if self.debug_viz:
+            import matplotlib
+            import matplotlib.pyplot as plt
+            argmax_bininit = depth_1h.argmax(1)
+            matplotlib.use('Agg')
+            plt.imshow(argmax_bininit[0].cpu())
+            plt.savefig('/home/project/OccDepth/output/debug_bin.png')
+            plt.close()                                               
+
+        # ---- 4.5 Gaussian smoothing along bin dimension ----
+        # Spread each pixel's vote to neighbouring LID bins so voxels whose
+        # projected depth falls near (not exactly at) the measured depth still
+        # get a meaningful weight.  This approximates the smooth distribution
+        # that FlospDepth's depth_net produces via softmax.
+        gk = torch.exp( # 高斯核覆盖范围 (-4 到 +4) 和 std=3.0 的高斯分布
+            -torch.arange(-4,3, device=dev, dtype=torch.float32)**2 / (2 * 3.0**2)
+        )
+        gk = (gk / gk.sum()).reshape(1, 1, -1, 1, 1)           # (1, 1, K, 1, 1)
+        depth_1h = depth_1h.unsqueeze(1)                       # (B, 1, 80, H, W)
+        depth_1h = F.conv3d(depth_1h, gk, padding=(4, 0, 0))  #conv3d 沿 bin 维度两边的 padding 数，等于 (kernel-1)/2 = 4，保持输出 shape 不变。
+        depth_1h = depth_1h.squeeze(1)                         # (B, 80, H, W)
+        depth_1h = depth_1h / depth_1h.sum(dim=1, keepdim=True).clamp(min=1e-6)
 
         # Average-pool to 1/8 resolution → each 8×8 tile gives a soft
         # histogram over the 80 depth bins.
@@ -505,6 +573,12 @@ class OccDepth(pl.LightningModule):
         depth_dist = depth_dist / depth_dist.sum(dim=1, keepdim=True).clamp(min=1e-6)
         # (B, 80, H/8, W/8) = (B, 80, 60, 80)
 
+        if self.debug_viz:
+            argmax_bin = depth_dist.argmax(1)
+            plt.imshow(argmax_bin[0].cpu())
+            plt.savefig('/home/project/OccDepth/output/argmax_bin.png')
+            plt.close()     
+         
         # ---- 5. Sample depth distribution into voxel space ----
         depth_dist = depth_dist.unsqueeze(1)               # (B, 1, 80, 60, 80)
 
@@ -512,38 +586,86 @@ class OccDepth(pl.LightningModule):
         image_shape = torch.tensor([final_dim], device=dev).float().repeat(bs, 1)
         ida_mats = torch.stack(batch["ida_mats"]).float()  # (B, n_views, 4, 4)
 
-        all_vf = []
-        for i in range(n_views):
-            # Build (B, 3, 4) camera-to-image matrix [K | 0]
-            c2i = torch.zeros(bs, 3, 4, device=dev, dtype=cam_k.dtype)
-            c2i[:, :3, :3] = cam_k[:, i]
+        # IGEV-RR already uses the stereo pair internally and outputs a single
+        # disparity map in the left camera frame → sample using view 0 only.
+        c2i = torch.zeros(bs, 3, 4, device=dev, dtype=cam_k.dtype)
+        c2i[:, :3, :3] = cam_k[:, 0]
 
-            grid = self.igev_grid_generator(
-                lidar_to_cam=T_velo_2_cam[:, i],
-                cam_to_img=c2i,
-                ida_mats=ida_mats[:, i],
-                image_shape=image_shape,
-            )                                              # (B, X, Y, Z, 3)
+        grid = self.igev_grid_generator(
+            lidar_to_cam=T_velo_2_cam[:, 0],
+            cam_to_img=c2i,
+            ida_mats=ida_mats[:, 0],
+            image_shape=image_shape,
+        )                                              # (B, X, Y, Z, 3)
 
-            vf = self.igev_sampler(
-                input_features=depth_dist, grid=grid
-            )                                              # (B, 1, X, Y, Z)
-            all_vf.append(vf)
+        x3ds_depth = self.igev_sampler(
+            input_features=depth_dist, grid=grid
+        )                                              # (B, 1, X, Y, Z)
+        
+        if self.debug_viz:
+            import os
+            output_dir = '/home/project/OccDepth/output'
+            x3ds_np = x3ds_depth[0, 0].detach().cpu().numpy()
+            X, Y, Z = x3ds_np.shape
+            print(f"--- 检查 x3ds_depth 统计信息 ---")
+            print(f"Shape: {x3ds_np.shape}")
+            print(f"Min: {x3ds_np.min():.4f} | Max: {x3ds_np.max():.4f} | Mean: {x3ds_np.mean():.4f}")
+            thresh = x3ds_np.max() * 0.3
+            print(f"激活体素数量 ( > {thresh:.4f} ): {np.sum(x3ds_np > thresh)} / {x3ds_np.size}")
+            # ------------------------------------------------------------
+            # 方案 A: 保存为 3D 点云 (.ply)
+            # ------------------------------------------------------------
+            xs, ys, zs = np.where(x3ds_np > thresh)
+            if len(xs) > 0:
+                weights = x3ds_np[xs, ys, zs]
+                w_norm = (weights - thresh) / (x3ds_np.max() - thresh + 1e-6)
+                r = (w_norm * 255).astype(np.uint8)
+                g = ((1 - np.abs(w_norm - 0.5) * 2) * 255).astype(np.uint8)
+                b = ((1 - w_norm) * 255).astype(np.uint8)
+                ply_path = os.path.join(output_dir, 'debug_x3ds_pointcloud.ply')
+                with open(ply_path, 'w') as f:
+                    f.write("ply\n")
+                    f.write("format ascii 1.0\n")
+                    f.write(f"element vertex {len(xs)}\n")
+                    f.write("property float x\n")
+                    f.write("property float y\n")
+                    f.write("property float z\n")
+                    f.write("property uchar red\n")
+                    f.write("property uchar green\n")
+                    f.write("property uchar blue\n")
+                    f.write("end_header\n")
+                    for i in range(len(xs)):
+                        f.write(f"{xs[i]} {ys[i]} {zs[i]} {r[i]} {g[i]} {b[i]}\n")
+                print(f"成功保存 3D 点云至: {ply_path}")
+            else:
+                print("警告: 没有体素超过设定的阈值，未生成 .ply 文件。")
+            # ------------------------------------------------------------
+            # 方案 B: 2D 投影图 (BEV 鸟瞰图 & 侧视图)
+            # ------------------------------------------------------------
+            bev_projection = np.max(x3ds_np, axis=2)
+            side_projection = np.max(x3ds_np, axis=1)
+            plt.figure(figsize=(12, 5))
+            plt.subplot(1, 2, 1)
+            plt.imshow(bev_projection, cmap='jet')
+            plt.title('BEV Projection (X-Y)')
+            plt.xlabel('Y (Width-like)')
+            plt.ylabel('X (Depth-like)')
+            plt.colorbar(label='Max Depth Weight')
+            plt.subplot(1, 2, 2)
+            plt.imshow(side_projection.T, cmap='jet', origin='lower')
+            plt.title('Side View Projection (X-Z)')
+            plt.xlabel('X (Depth-like)')
+            plt.ylabel('Z (Height)')
+            plt.colorbar(label='Max Depth Weight')
+            plt.tight_layout()
+            projection_path = os.path.join(output_dir, 'debug_x3ds_projections.png')
+            plt.savefig(projection_path)
+            plt.close()
+            print(f"成功保存 2D 投影图至: {projection_path}")
+        # ====================================================================
 
-        # Mean aggregation across views (accounting for co-visibility)
-        if n_views == 1:
-            x3ds_depth = all_vf[0]
-        else:
-            masks = None
-            for vf in all_vf:
-                if masks is None:
-                    masks = (vf > 0).float()
-                else:
-                    masks = masks + (vf > 0).float()
-            x3ds_depth = sum(all_vf)
-            x3ds_depth[masks > 0] = x3ds_depth[masks > 0] / masks[masks > 0]
-
-        return x3ds_depth                                   # (B, 1, X, Y, Z)
+        return x3ds_depth
+    
 
     def forward(self, batch):
         """

@@ -35,6 +35,15 @@ def batch_process(target_dir):
             # 1. 读取原始数据
             voxel_gt = np.load(file_path)
             
+            # 🎯 【新增：清洗 255 标签】
+            # 找出所有等于 255 的地方，强行赋值为 0
+            if np.any(voxel_gt == 255):
+                voxel_gt[voxel_gt == 255] = 0
+                
+                # 🎯 【核心要求：覆盖原始 npy 文件】
+                # 清洗完数据后立即写回，确保原始资产的数据纯净
+                np.save(file_path, voxel_gt)
+            
             # 获取当前体素的实际 shape 作为函数的输入尺寸参数
             current_shape = voxel_gt.shape
             
@@ -53,7 +62,7 @@ def batch_process(target_dir):
 
 
 # ==================== 配置路径 ====================
-BASE_DIR = Path("/home/data/Occ_stereo")
+BASE_DIR = Path("/home/data/OCC/OccData/sweeper_data/beidong_fanwuti/white_tiles/light_Advanced_2")
 
 # 源文件夹路径
 SRC_OCC = BASE_DIR / "occupancy_gt"
@@ -149,9 +158,10 @@ if __name__ == "__main__":
     # split_dataset()
     # print("\n🎉 数据集完美划分并对齐拷贝完成！")
     
-        #下采样 target
+    #下采样 target 
     
-    target_dir = "/home/data/Occ_stereo/test/occupancy_gt"
+    # TEST_DIR
+    target_dir = TEST_DIR / "occupancy_gt" #/home/data/OCC/OccData/sweeper_data/low/wood_floor/475+6207_sun/test/occupancy_gt"
     batch_process(target_dir)
     print("🏁 所有文件下采样处理完成！")
     
