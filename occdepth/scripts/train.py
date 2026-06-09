@@ -78,9 +78,15 @@ def main(config: DictConfig):
         class_weights = sweeper_class_weights
         class_weights_occ = torch.FloatTensor([0.05, 2])
         
+        # Support multiple data roots: use data_roots list if present,
+        # otherwise fall back to single data_root for backward compatibility.
+        data_root = list(config.data_roots) if hasattr(config, 'data_roots') and config.data_roots else config.data_root
+        preprocess_root = list(config.data_roots) if hasattr(config, 'data_roots') and config.data_roots else config.data_preprocess_root
+        stereo_depth_root = list(config.data_roots) if hasattr(config, 'data_roots') and config.data_roots else config.data_stereo_depth_root
+
         data_module = SweeperDataModule(
-            root=config.data_root,
-            preprocess_root=config.data_preprocess_root,
+            root=data_root,
+            preprocess_root=preprocess_root,
             frustum_size=config.frustum_size,
             project_scale=config.project_scale,
             batch_size=int(config.batch_size_per_gpu),
@@ -89,7 +95,7 @@ def main(config: DictConfig):
             multi_view_mode=config.multi_view_mode,
             use_stereo_depth_gt=config.use_stereo_depth_gt,
             use_lidar_depth_gt=config.use_lidar_depth_gt,
-            data_stereo_depth_root=config.data_stereo_depth_root,
+            data_stereo_depth_root=stereo_depth_root,
             occluded_cls=config.occluded_cls,
             use_strong_img_aug=config.use_strong_img_aug,
         )
