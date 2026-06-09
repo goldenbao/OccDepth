@@ -128,11 +128,17 @@ class SwepperDataset(Dataset):
         use_strong_img_aug=False,
     ):
         super().__init__()
-        self.root = root
-        self.label_root = os.path.join(preprocess_root, "labels")
+        # Support both single root (str) and multiple roots (list)
+        if isinstance(root, str):
+            roots = [root]
+        else:
+            roots = root
+        self.roots = roots
+        self.label_root = os.path.join(preprocess_root, "labels") if isinstance(preprocess_root, str) else preprocess_root
         self.n_classes = 24  # 语义的种类 free + 各种label 不包括unknown（遮挡）
         splits = {
             "train": ["train"],
+            # "val": ["test_apple"],
             "val": ["test"],
             "test":["test"],
         }
@@ -146,9 +152,9 @@ class SwepperDataset(Dataset):
         self.vox_origin = np.array([0.1, -0.4, -0.1]) #体素原点在世界坐标系下的位置
         self.fliplr = fliplr
 
-        self.voxel_size = 0.01  # 
-        self.img_W = 640  # 
-        self.img_H = 480  # 
+        self.voxel_size = 0.01  #
+        self.img_W = 640  #
+        self.img_H = 480  #
         self.pattern_id = pattern_id
         self.multi_view_mode = multi_view_mode
 
@@ -185,52 +191,30 @@ class SwepperDataset(Dataset):
             )
 
         self.scans = []
-        for sequence in self.sequences:
-            
-            # swepper para read
-            config_path = "/home/project/OccDepth/occ_config.yaml"
+        for root_path in self.roots:
+            # Load camera config from this root's occ_config.yaml
+            config_path = os.path.join(root_path, "occ_config.yaml")
             T_velo_2_cam, proj_matrix, cam_k = get_sweeper_calib(config_path)
-            
+
             P = [cam_k]
             P.append(cam_k)
             P = np.array(P)
-            
-            # region // old kitti read param
-            # calib = self.read_calib( 
-            #     os.path.join(self.root, "dataset", "sequences", sequence, "calib.txt")
-            # )
-            # P = [calib["P2"]]
-            # P.append(calib["P3"])
-            # P = np.array(P)
-            # Tr_velo_2_cam_0 = calib["Tr"]
-            # proj_matrix = [P[0] @ Tr_velo_2_cam_0]
-            # proj_matrix.append(P[1] @ Tr_velo_2_cam_0) 
-            # proj_matrix = np.array(proj_matrix)
-            # cam_k2 = P[0][0:3, 0:3]
-            # cam_k3 = P[1][0:3, 0:3]
-            # # Fix external parameter transformation bug
-            # T_velo_2_cam2 = np.identity(4)  # 4x4 matrix
-            # T_velo_2_cam2[:3, :4] = np.linalg.inv(cam_k2) @ proj_matrix[0]
-            # # Transform from lidar to cam3
-            # T_velo_2_cam3 = np.identity(4)  # 4x4 matrix
-            # T_velo_2_cam3[:3, :4] = np.linalg.inv(cam_k3) @ proj_matrix[1]
-            # T_velo_2_cam = [T_velo_2_cam2, T_velo_2_cam3]
-            # T_velo_2_cam = np.array(T_velo_2_cam)
-            # endregion
-            
-            glob_path = os.path.join(
-                self.root, sequence, "occupancy_gt", "*occ_gt.npy"
-            )
-            for voxel_path in glob.glob(glob_path):
-                self.scans.append(
-                    {
-                        "sequence": sequence,
-                        "P": P, #[K T] 3*4 相机内参以及相机0到 2、3的offset,双目数据下此offset设为0
-                        "T_velo_2_cam": T_velo_2_cam, #外参 4*4
-                        "proj_matrix": proj_matrix,  #雷达投影到左右相机平面，内参*外参，3*4 x [x y z 1]
-                        "voxel_path": voxel_path,
-                    }
+
+            for sequence in self.sequences:
+                glob_path = os.path.join(
+                    root_path, sequence, "occupancy_gt", "*occ_gt.npy"
                 )
+                for voxel_path in glob.glob(glob_path):
+                    self.scans.append(
+                        {
+                            "root": root_path,
+                            "sequence": sequence,
+                            "P": P, #[K T] 3*4 相机内参以及相机0到 2、3的offset,双目数据下此offset设为0
+                            "T_velo_2_cam": T_velo_2_cam, #外参 4*4
+                            "proj_matrix": proj_matrix,  #雷达投影到左右相机平面，内参*外参，3*4 x [x y z 1]
+                            "voxel_path": voxel_path,
+                        }
+                    )
 
         self.normalize_rgb = transforms.Compose(
             [
@@ -267,6 +251,7 @@ class SwepperDataset(Dataset):
             }
         """
         scan = self.scans[index]
+        root = scan["root"]
         voxel_path = scan["voxel_path"]
         sequence = scan["sequence"]
         P = scan["P"]  # 3x4 intrinsic matrix
@@ -283,7 +268,7 @@ class SwepperDataset(Dataset):
 
         rgb_path = [
             os.path.join(
-                self.root,
+                root,
                 sequence,
                 "left_sync",
                 "SLAM_SLAM_L_"+ frame_id + ".jpg",
@@ -292,7 +277,7 @@ class SwepperDataset(Dataset):
 
         rgb_path.append(
             os.path.join(
-                self.root,
+                root,
                 sequence,
                 "right_sync",
                 "SLAM_SLAM_R_" + frame_id + ".jpg",
@@ -358,7 +343,7 @@ class SwepperDataset(Dataset):
             
             # 下采样 计算交叉熵
             target_4_path = os.path.join(
-                self.root, sequence, "occupancy_gt", "SLAM_SLAM_L_"+ frame_id+"_occ_gt_1_4.npy"
+                root, sequence, "occupancy_gt", "SLAM_SLAM_L_"+ frame_id+"_occ_gt_1_4.npy"
             )
             target_1_4 = np.load(target_4_path)
 
@@ -368,7 +353,7 @@ class SwepperDataset(Dataset):
 
         if self.with_occluded:
             occluded_path = os.path.join(
-                self.root,
+                root,
                 "dataset",
                 "sequences",
                 sequence,

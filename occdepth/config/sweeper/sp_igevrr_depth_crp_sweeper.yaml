@@ -5,9 +5,12 @@ dataset: "sweeper"
 n_relations: 4
 
 enable_log: true
-data_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
-data_preprocess_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
-data_stereo_depth_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+data_roots:
+  - '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+  - '/home/data/OCC/OccData/sweeper_data/beidong_fanwuti/white_tiles/light_Advanced_2'
+# data_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+# data_preprocess_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+# data_stereo_depth_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
 
 logdir: 'logdir/b3_F32_IGEVRR'
 
