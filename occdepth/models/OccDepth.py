@@ -303,6 +303,48 @@ class OccDepth(pl.LightningModule):
         else:
             raise NotImplementedError(f"{self.trans_2d_to_3d} is not supported yet.")
 
+    def load_state_dict(self, state_dict, strict=True):
+        # Call original load_state_dict (this overwrites IGEV-RR with checkpoint weights)
+        result = super().load_state_dict(state_dict, strict=strict)
+        # Immediately reload IGEV-RR from .pth to undo checkpoint corruption.
+        # This ensures IGEV-RR always uses the original .pth weights regardless
+        # of what the checkpoint contains (frozen weights shouldn't change during
+        # training, but in practice checkpoint saves/loads can corrupt them).
+        if hasattr(self, 'igev_rr') and self.trans_2d_to_3d == "igev_rr_depth":
+            from occdepth.models.igev_rr_wrapper import IGEVRRWrapper
+            new_igev_rr = IGEVRRWrapper(
+                ckpt_path=self.igev_rr_ckpt,
+                max_disp=self.igev_rr_max_disp,
+            )
+            new_igev_rr.eval()
+            for p in new_igev_rr.parameters():
+                p.requires_grad = False
+            # Move to same device as the main model
+            if next(self.parameters()).is_cuda:
+                new_igev_rr.cuda()
+            self.igev_rr = new_igev_rr
+        return result
+
+    def train(self, mode=True):
+        super().train(mode)
+        # Keep IGEV-RR frozen in eval mode during training so its
+        # Batchnorm running stats don't drift and weights don't corrupt.
+        if hasattr(self, 'igev_rr') and self.trans_2d_to_3d == "igev_rr_depth":
+            self.igev_rr.eval()
+        return self
+
+    def on_save_checkpoint(self, checkpoint):
+        # Replace IGEV-RR weights in checkpoint with clean .pth weights
+        # so saved checkpoints are never corrupted.
+        if hasattr(self, 'igev_rr') and self.trans_2d_to_3d == "igev_rr_depth":
+            from occdepth.models.igev_rr_wrapper import IGEVRRWrapper
+            clean = IGEVRRWrapper(
+                ckpt_path=self.igev_rr_ckpt,
+                max_disp=self.igev_rr_max_disp,
+            )
+            for k, v in clean.state_dict().items():
+                checkpoint["state_dict"]["igev_rr." + k] = v
+
     def process_rgbs(self, img, batch, n_views):
         depth_key = "gt_depth"
         x_rgb=[]
@@ -489,13 +531,11 @@ class OccDepth(pl.LightningModule):
         depth = depth.clamp(0.1, 0.9)
 
         if self.debug_viz:
-            #region Save depth as interactive HTML for debugging
             if not depth.is_cuda or (hasattr(self, 'depth_html_saved') and self.depth_html_saved):
                 pass
             else:
                 try:
                     import plotly.express as px
-                    import numpy as np
                     d_np = depth[0].detach().cpu().numpy()
                     fig = px.imshow(d_np, zmin=0.1, zmax=0.9, color_continuous_scale='jet',
                                     title='IGEV-RR Depth (0.1-0.9m)')
@@ -505,7 +545,6 @@ class OccDepth(pl.LightningModule):
                     print(f"[igev_rr_depth] Saved interactive depth HTML: {d_np.shape}")
                 except Exception as e:
                     print(f"[igev_rr_depth] Failed to save depth HTML: {e}")
-            #endregion
 
         # ---- 3.5 Mask out black-border pixels so they contribute zero depth vote ----
         # After undistortion, ~9% of edge pixels are invalid black border with garbage disp.
