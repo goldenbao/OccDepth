@@ -30,9 +30,13 @@ def main(config: DictConfig):
     # Setup dataloader
     if config.dataset == "sweeper":
         full_scene_size = tuple(config.full_scene_size)
+        data_root = list(config.data_roots) if hasattr(config, 'data_roots') and config.data_roots else config.data_root
+        preprocess_root = list(config.data_roots) if hasattr(config, 'data_roots') and config.data_roots else config.data_preprocess_root
+        stereo_depth_root = list(config.data_roots) if hasattr(config, 'data_roots') and config.data_roots else config.data_stereo_depth_root
+
         data_module = SweeperDataModule(
-            root=config.data_root,
-            preprocess_root=config.data_preprocess_root,
+            root=data_root,
+            preprocess_root=preprocess_root,
             frustum_size=config.frustum_size,
             batch_size=int(config.batch_size_per_gpu),
             num_workers=int(config.num_workers_per_gpu * config.n_gpus),
@@ -40,7 +44,7 @@ def main(config: DictConfig):
             multi_view_mode=config.multi_view_mode,
             use_stereo_depth_gt=config.use_stereo_depth_gt,
             use_lidar_depth_gt=config.use_lidar_depth_gt,
-            data_stereo_depth_root=config.data_stereo_depth_root,
+            data_stereo_depth_root=stereo_depth_root,
         )
         data_module.setup()
         data_loader = data_module.val_dataloader()
@@ -86,8 +90,11 @@ def main(config: DictConfig):
         print("dataset not support")
 
     # Load pretrained models
-    model_path = os.path.join(get_original_cwd(), "trained_models", "occdepth.ckpt")
-
+    # model_path = os.path.join(get_original_cwd(), "trained_models", "occdepth.ckpt")
+    # model_path = os.path.join(get_original_cwd(), "trained_models", "sweeper_occdepth.ckpt")
+    # model_path = os.path.join(get_original_cwd(), "trained_models", "sweeper_occdepth_free.ckpt")
+    model_path = os.path.join(get_original_cwd(), "trained_models", "use_igev_rr.ckpt")
+    
     model = OccDepth.load_from_checkpoint(
         model_path,
         full_scene_size=full_scene_size,

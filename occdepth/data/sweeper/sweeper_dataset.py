@@ -388,7 +388,7 @@ class SwepperDataset(Dataset):
         if self.split != "test":
             if self.use_stereo_depth_gt:      
                 stereo_depth_path = os.path.join(
-                    self.data_stereo_depth_root,
+                    root,
                     sequence,
                     "depth_maps",
                     "SLAM_SLAM_L_"+ frame_id + "_depth_meter.npy",
@@ -399,7 +399,7 @@ class SwepperDataset(Dataset):
             elif self.use_lidar_depth_gt:
                 lidar_depth_path = [
                     os.path.join(
-                        self.data_lidar_depth_root,
+                        root,
                         "dataset",
                         "sequences",
                         sequence,
