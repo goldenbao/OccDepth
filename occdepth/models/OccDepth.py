@@ -300,12 +300,36 @@ class OccDepth(pl.LightningModule):
                 grid_size=grid_size, pc_range=pc_range, disc_cfg=disc_cfg
             )
             self.igev_sampler = Sampler(mode="bilinear", padding_mode="zeros")
+
+            # Student depth predictor (FlospDepth) supervised by frozen IGEV-RR teacher.
+            # No GT depth needed — teacher provides dense pseudo-labels.
+            self.use_igev_student = config.get("use_igev_student", False)
+            self.igev_student_fuse_alpha = config.get("igev_student_fuse_alpha", 0.7)
+            if self.use_igev_student:
+                _student_conf = dict(self.flosp_depth_conf)
+                _student_conf["return_depth"] = True
+                # Match UNet2D feature channels (feature_2d_oc), not the
+                # hardcoded default from flosp_depth_conf_map.
+                _student_conf["depth_net_conf"] = dict(_student_conf["depth_net_conf"])
+                _student_conf["depth_net_conf"]["in_channels"] = self.feature_2d_oc
+                self.igev_student_depth = FlospDepth(**_student_conf)
+                self.igev_student_depth_loss = DepthClsLoss(
+                    downsample_factor=self.flosp_depth_conf["downsample_factor"],
+                    d_bound=self.flosp_depth_conf["d_bound"],
+                )
         else:
             raise NotImplementedError(f"{self.trans_2d_to_3d} is not supported yet.")
 
     def load_state_dict(self, state_dict, strict=True):
-        # Call original load_state_dict (this overwrites IGEV-RR with checkpoint weights)
-        result = super().load_state_dict(state_dict, strict=strict)
+        # If the model has student depth but the checkpoint doesn't, relax the
+        # strict check so the newly-added student head can be randomly initialized.
+        actual_strict = strict
+        if hasattr(self, 'igev_student_depth'):
+            has_student = any(k.startswith('igev_student_depth.') for k in state_dict)
+            if not has_student:
+                actual_strict = False
+        # Call original load_state_dict
+        result = super().load_state_dict(state_dict, strict=actual_strict)
         # Immediately reload IGEV-RR from .pth to undo checkpoint corruption.
         # This ensures IGEV-RR always uses the original .pth weights regardless
         # of what the checkpoint contains (frozen weights shouldn't change during
@@ -485,8 +509,33 @@ class OccDepth(pl.LightningModule):
                 # convert disparity → depth → LID bin distribution,
                 # sample into voxel space via grid_generator + sampler.
                 n_views = len(x_rgb)
-                x3ds_depth = self._forward_igev_rr_depth(batch, n_views)
-                x3ds = x3ds * x3ds_depth * 100
+                x3ds_depth, depth_teacher = self._forward_igev_rr_depth(batch, n_views)
+
+                if getattr(self, 'use_igev_student', False):
+                    # Student depth (FlospDepth) forward
+                    ds = self.flosp_depth_conf["downsample_factor"]
+                    rgb_feat_layer = f"1_{ds}"
+                    x_rgb_reshape = []
+                    for j in range(n_views):
+                        x_rgb_reshape.append(x_rgb[j][rgb_feat_layer])
+                    img_feat = torch.stack(x_rgb_reshape, 1).to(device)
+
+                    x3ds_student, depth_pred = self.igev_student_depth(
+                        img_feat=img_feat,
+                        cam_k=batch["cam_k"],
+                        T_velo_2_cam=batch["T_velo_2_cam"],
+                        ida_mats=batch["ida_mats"],
+                        vox_origin=vox_origin,
+                    )
+
+                    alpha = self.igev_student_fuse_alpha
+                    x3ds_depth_fused = alpha * x3ds_depth + (1 - alpha) * x3ds_student
+                    x3ds = x3ds * x3ds_depth_fused * 100
+
+                    self._teacher_depth = depth_teacher  # for loss in step()
+                else:
+                    depth_pred = None
+                    x3ds = x3ds * x3ds_depth * 100
         else:
             raise NotImplementedError(f"{self.trans_2d_to_3d} is not supported yet.")
         return x3ds, depth_pred
@@ -703,8 +752,8 @@ class OccDepth(pl.LightningModule):
             print(f"成功保存 2D 投影图至: {projection_path}")
         # ====================================================================
 
-        return x3ds_depth
-    
+        return x3ds_depth, depth.detach()
+
 
     def forward(self, batch):
         """
@@ -745,6 +794,9 @@ class OccDepth(pl.LightningModule):
         out.update(net_out)
         if self.with_depth_gt and self.trans_2d_to_3d=="flosp_depth":
             out["depth_pred"] = depth_pred
+        if self.trans_2d_to_3d == "igev_rr_depth" and getattr(self, 'use_igev_student', False):
+            out["depth_pred"] = depth_pred
+            out["depth_teacher"] = self._teacher_depth
         return out
 
     def step(self, batch, step_type, metric):
@@ -828,6 +880,24 @@ class OccDepth(pl.LightningModule):
             )
             loss += loss_depth
 
+            self.log(
+                step_type + "/loss_depth",
+                loss_depth.detach(),
+                on_epoch=True,
+                sync_dist=True,
+            )
+
+        # IGEV-RR student distillation loss: MSE between student depth distribution
+        # and teacher (IGEV-RR) dense depth, no GT depth needed.
+        if self.trans_2d_to_3d == "igev_rr_depth" and getattr(self, 'use_igev_student', False):
+            depth_teacher = out_dict["depth_teacher"].unsqueeze(1)  # (B, 1, H, W)
+            # Student outputs depth for both views; teacher is mono (left camera).
+            depth_pred_student = out_dict["depth_pred"][:, 0:1]     # (B, 1, D, h, w)
+            loss_depth = (
+                self.igev_student_depth_loss.get_depth_loss(depth_teacher, depth_pred_student)
+                * self.depth_loss_w
+            )
+            loss += loss_depth
             self.log(
                 step_type + "/loss_depth",
                 loss_depth.detach(),

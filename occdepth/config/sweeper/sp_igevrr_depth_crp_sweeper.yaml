@@ -6,7 +6,7 @@ n_relations: 4
 
 enable_log: true
 data_roots:
-  - '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+  # - '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
   - '/home/data/OCC/OccData/sweeper_data/beidong_fanwuti/white_tiles/light_Advanced_2'
 # data_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
 # data_preprocess_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
@@ -30,7 +30,7 @@ share_2d_backbone_gradient: true
 fp_loss: true
 frustum_size: 8
 
-batch_size_per_gpu: 1
+batch_size_per_gpu: 2
 n_gpus: 1
 num_workers_per_gpu: 0
 
@@ -76,3 +76,7 @@ trans_2d_to_3d: "igev_rr_depth" # "flosp", "flosp_depth", "igev_rr_depth"
 ### IGEV-RR config
 igev_rr_ckpt: '/home/data/bino_stereo/binocularstereovision/scratch_igev_rr_except_mn2_on_sceneflow_w_aug/ckpt/igev_rr_260520_1948_ep56_neice9_123657.pth'
 igev_rr_max_disp: 192
+
+### IGEV-RR student (distill depth from IGEV-RR teacher to FlospDepth)
+use_igev_student: false # set true to enable student depth predictor (no GT depth needed)
+igev_student_fuse_alpha: 0.7 # teacher weight in fusion: alpha * teacher + (1-alpha) * student
