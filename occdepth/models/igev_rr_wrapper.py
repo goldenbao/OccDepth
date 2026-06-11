@@ -74,11 +74,18 @@ class IGEVRRWrapper(nn.Module):
         args = _make_igev_args(max_disp, hidden_dims, n_gru_iters, mobilenetv2_075)
         self.model = _mod.IGEVRRStereo(args)
 
-        # Load checkpoint weights
-        if ckpt_path and os.path.isfile(ckpt_path):
-            _load_ckpt(self.model, ckpt_path)
-        else:
-            print(f"WARNING IGEVRRWrapper: checkpoint not found at {ckpt_path}")
+        # Load checkpoint weights — fail loudly if missing
+        if not ckpt_path:
+            raise FileNotFoundError(
+                f"IGEVRRWrapper: igev_rr_ckpt is empty. "
+                f"Set igev_rr_ckpt in your config yaml."
+            )
+        if not os.path.isfile(ckpt_path):
+            raise FileNotFoundError(
+                f"IGEVRRWrapper: checkpoint not found at:\n  {ckpt_path}\n"
+                f"Verify igev_rr_ckpt in your config yaml points to a valid .pth file."
+            )
+        _load_ckpt(self.model, ckpt_path)
 
         # Freeze everything
         self.model.eval()
@@ -137,4 +144,15 @@ def _load_ckpt(model, ckpt_path):
     model.load_state_dict(model_sd)
     n_loaded = len(update)
     total = len(model_sd)
+    if n_loaded != total:
+        missing = set(model_sd.keys()) - set(update.keys())
+        print(f"IGEVRRWrapper: loaded {n_loaded}/{total} params from {ckpt_path}")
+        print(f"  Missing keys ({len(missing)}):")
+        for k in sorted(missing)[:10]:
+            print(f"    {k}")
+        raise RuntimeError(
+            f"IGEVRRWrapper: only {n_loaded}/{total} parameters loaded from {ckpt_path}. "
+            f"Checkpoint key mismatch — check whether the .pth was trained with "
+            f"a different architecture (DataParallel wrapper, different backbone, etc.)."
+        )
     print(f"IGEVRRWrapper: loaded {n_loaded}/{total} params from {ckpt_path}")
