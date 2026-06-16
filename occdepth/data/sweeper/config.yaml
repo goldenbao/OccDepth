@@ -1,0 +1,110 @@
+input:
+  image_dir: "/home/data/Occ_stereo/low/test"
+  file_pattern: "*.jpg"      # 图片扩展名模式
+
+# 选择相机参数 profile (对应 camera_profiles 中的 key)
+# 切换不同机器时只需修改此项，无需手动注释
+camera_profile: "advanced_2"
+
+camera_profiles:
+  advanced_2:
+    focal_length: 293.756744
+    baseline: 0.064773
+    fx: 293.756744
+    fy: 293.756744
+    cx: 324.838501
+    cy: 241.260452
+    camera_external: [
+      0.016072, -0.015371, 0.999753, 0.163700,
+      -0.999361, -0.032179, 0.015571, 0.032500,
+      0.031932, -0.999364, -0.015879, 0.062150,
+      0.0, 0.0, 0.0, 1.0
+    ]
+
+  low_floor:
+    focal_length: 292.335297
+    baseline: 0.065155
+    fx: 292.335297
+    fy: 292.335297
+    cx: 329.350525
+    cy: 238.175156
+    camera_external: [
+      0.004059, -0.001540,  0.999991,  0.165400,
+      -0.999847,  -0.017029,  0.004032,  0.032500,
+      0.017023,  -0.999854,  -0.001609,  0.062150,
+      0.0, 0.0, 0.0, 1.0
+    ]
+
+model:
+  local_checkpoint_path: "/home/bob/Lexar_SSD/sam3/sam3.pt"
+
+environment:
+  depth_env: "foundation_stereo"
+  semantic_env: "sam3"
+
+depth:
+  ckpt_dir: "/home/bob/Lexar_SSD/FoundationStereo/23-51-11/model_best_bp2.pth"
+  scale: 1.0
+  max_depth: 1.0
+  valid_iters: 32
+  left_pattern: "SLAM_SLAM_L_"
+  right_pattern: "SLAM_SLAM_R_"
+  border_crop:
+    top: 18
+    bottom: 19
+    right: 11
+    left: 0
+  get_pc: 1
+  remove_invisible: 0
+  denoise_cloud: 0
+  denoise_nb_points: 30
+  denoise_radius: 0.03
+
+output:
+  # base_dir: "/home/bob/Lexar_SSD/OCC/OccData/sweeper_data/beidong_fanwuti/white_tiles/light_Advanced_2"
+  # base_dir: "/home/data/Occ_stereo/low/train"
+    base_dir: "/home/data/Occ_stereo/jinjie2/test"
+
+semantic:
+  # 完整 22 类 
+  categories:
+    - "floor"
+    - "wall"
+    - "chair"
+    - "table"
+    - "sofa"
+    - "cabinet"
+    - "bed"
+    - "wire"
+    - "shoe"
+    - "cloth"
+    - "trashcan"
+    - "charging dock"
+    - "fan"
+    - "human"
+    - "pet"
+    - "pet_waste"
+    - "liquid"
+    - "carpet"
+    - "plant"
+    - "Stain"
+    - "paper or tissue"
+    - "building blocks"
+  # 精简版
+  categories_lite:
+    - "floor"
+    - "wall"
+    - "wire"
+    - "shoe"
+    - "pet"
+    - "pet_waste"
+    - "carpet"
+    - "paper or tissue"
+    - "building blocks"
+  threshold: 0.5
+
+occupancy:
+  x_range: [0.1, 0.9]
+  y_range: [-0.4, 0.4]
+  z_range: [-0.1, 0.38]
+  voxel_size: 0.01

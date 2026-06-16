@@ -135,7 +135,7 @@ class SwepperDataset(Dataset):
             roots = root
         self.roots = roots
         self.label_root = os.path.join(preprocess_root, "labels") if isinstance(preprocess_root, str) else preprocess_root
-        self.n_classes = 24  # 语义的种类 free + 各种label 不包括unknown（遮挡）
+        self.n_classes = 11  # 语义的种类 free + 各种label 不包括unknown（遮挡）
         splits = {
             "train": ["train"],
             # "val": ["test_apple"],
@@ -201,8 +201,11 @@ class SwepperDataset(Dataset):
             P = np.array(P)
 
             for sequence in self.sequences:
+                # glob_path = os.path.join(
+                #     root_path, sequence, "occupancy_gt", "*occ_gt.npy"
+                # )
                 glob_path = os.path.join(
-                    root_path, sequence, "occupancy_gt", "*occ_gt.npy"
+                    root_path, sequence, "occupancy_gt_lite", "*occ_gt.npy"
                 )
                 for voxel_path in glob.glob(glob_path):
                     self.scans.append(
@@ -342,9 +345,13 @@ class SwepperDataset(Dataset):
             data["target"] = target
             
             # 下采样 计算交叉熵
+            # target_4_path = os.path.join(
+            #     root, sequence, "occupancy_gt", "SLAM_SLAM_L_"+ frame_id+"_occ_gt_1_4.npy"
+            # )
             target_4_path = os.path.join(
-                root, sequence, "occupancy_gt", "SLAM_SLAM_L_"+ frame_id+"_occ_gt_1_4.npy"
+                root, sequence, "occupancy_gt_lite", "SLAM_SLAM_L_"+ frame_id+"_occ_gt_1_4.npy"
             )
+            
             target_1_4 = np.load(target_4_path)
 
             # compute supervoxel -> voxel attention matrix(4, HWD, H/2 W/2 D/2)
