@@ -5,9 +5,14 @@ dataset: "sweeper"
 n_relations: 4
 
 enable_log: true
-data_root: '/home/data/Occ_stereo'
-data_preprocess_root: '/home/data/Occ_stereo'
-data_stereo_depth_root: '/home/data/Occ_stereo'
+# data_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+# data_preprocess_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+# data_stereo_depth_root: '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+
+data_roots:
+  - '/home/project/OccData/sweeper_data/low/wood_floor/475+6207_sun'
+  - '/home/data/OCC/OccData/sweeper_data/beidong_fanwuti/white_tiles/light_Advanced_2'
+  # - '/home/data/OCC/OccData/sweeper_data/beidong_fanwuti/wood_floor/jj1'
 
 logdir: 'logdir/b3_F32_FixMultiview'
 
@@ -31,7 +36,7 @@ frustum_size: 8
 # n_gpus: 3
 # num_workers_per_gpu: 8
 
-batch_size_per_gpu: 1
+batch_size_per_gpu: 2
 n_gpus: 1
 num_workers_per_gpu: 0
 
@@ -44,6 +49,10 @@ context_prior: true # crp loss
 
 relation_loss: true
 CE_ssc_loss: true
+ssc_loss_type: "ce"           # "ce" | "focal" | "dice" | "ce+dice" | "focal+dice"
+class_weight_mode: "uniform"   # "uniform" | "frequency"
+focal_gamma: 2.0
+dice_smooth: 1.0
 sem_scal_loss: true
 geo_scal_loss: true
 
@@ -65,7 +74,7 @@ full_scene_size: # 3d scene 尺寸定义
 project_scale: 2 # 投影到 3d voxel 的下采样倍数
 feature: 32 # 3d 网络 channel 维度
 feature_2d_oc: 32 # # 2d 网络输出 channel 维度
-n_classes: 24 # 分类数目
+n_classes: 11 # 分类数目
 backbone_2d_name: 'tf_efficientnet_b3_ns' # 2d backbone 定义
 return_up_feats: 1 # choices:1, 2, 4, 8; help: 2d backbone 返回的最大特征尺寸设定
 cascade_cls: true # 级联分类

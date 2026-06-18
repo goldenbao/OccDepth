@@ -51,6 +51,11 @@ def main(config: DictConfig):
 
     if config.CE_ssc_loss:
         exp_name += "_CEssc"
+    ssc_loss_type = config.get("ssc_loss_type", "ce")
+    if ssc_loss_type != "ce":
+        exp_name += f"_{ssc_loss_type}"
+    if config.get("class_weight_mode", "uniform") == "frequency":
+        exp_name += "_freqWeight"
     if config.geo_scal_loss:
         exp_name += "_geoScalLoss"
     if config.sem_scal_loss:

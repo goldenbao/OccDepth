@@ -97,3 +97,68 @@ def CE_ssc_loss(pred, target, class_weights):
     loss = criterion(pred, target.long())
 
     return loss
+
+
+def FocalLoss(pred, target, class_weights, gamma=2.0):
+    """
+    Focal Loss: FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+
+    Args:
+        pred: (B, C, H, W, D) raw logits
+        target: (B, H, W, D) long, ignore_index=255
+        class_weights: (C,) per-class weights
+        gamma: focusing parameter (default 2.0)
+    """
+    # Per-element CE loss (no reduction, no weighting yet)
+    ce = F.cross_entropy(pred, target.long(), reduction="none", ignore_index=255)
+
+    # Softmax probabilities of the target class (p_t)
+    p = F.softmax(pred, dim=1)
+    mask = target != 255
+    p_t = p.gather(1, target.unsqueeze(1).clamp(min=0))  # clamp for ignore_index
+    p_t = p_t.squeeze(1)  # (B, H, W, D)
+
+    # Focal factor: (1 - p_t)^gamma
+    focal_factor = (1.0 - p_t) ** gamma
+
+    # Gather class weights for each target
+    weight = class_weights[target.clamp(min=0)]  # (B, H, W, D)
+
+    # Combine: weight * focal_factor * CE
+    loss = (weight * focal_factor * ce).sum() / mask.float().sum().clamp(min=1.0)
+    return loss
+
+
+def DiceLoss(pred, target, class_weights, smooth=1.0):
+    """
+    Dice Loss: 1 - Dice coefficient, per-class weighted average.
+
+    Args:
+        pred: (B, C, H, W, D) raw logits
+        target: (B, H, W, D) long, ignore_index=255
+        class_weights: (C,) per-class weights
+        smooth: smoothing factor (default 1.0)
+    """
+    n_classes = pred.shape[1]
+    p = F.softmax(pred, dim=1)  # (B, C, H, W, D)
+
+    # One-hot target
+    target_clamped = target.clone()
+    target_clamped[target == 255] = 0  # temporary, we mask later
+    t = F.one_hot(target_clamped.long(), num_classes=n_classes)  # (B, H, W, D, C)
+    t = t.permute(0, 4, 1, 2, 3).float()  # (B, C, H, W, D)
+
+    # Mask: ignore unknown voxels in both pred and target
+    mask = (target != 255).float()  # (B, H, W, D)
+    mask = mask.unsqueeze(1)  # (B, 1, H, W, D)
+
+    intersection = (p * t * mask).sum(dim=(0, 2, 3, 4))  # (C,)
+    cardinality = ((p + t) * mask).sum(dim=(0, 2, 3, 4))  # (C,)
+
+    dice = (2.0 * intersection + smooth) / (cardinality + smooth)  # (C,)
+
+    # Weighted mean over classes with non-zero weight
+    valid_mask = class_weights > 0
+    dice_loss = 1.0 - dice  # (C,)
+    loss = (dice_loss * class_weights).sum() / class_weights[valid_mask].sum()
+    return loss

@@ -6,7 +6,7 @@ from occdepth.models.unet3d_kitti import UNet3D as UNet3DKitti
 from occdepth.models.unet3d_sweeper import UNet3D as UNet3DSweeper
 
 from occdepth.loss.sscMetrics import SSCMetrics
-from occdepth.loss.ssc_loss import sem_scal_loss, CE_ssc_loss, KL_sep, geo_scal_loss
+from occdepth.loss.ssc_loss import sem_scal_loss, CE_ssc_loss, KL_sep, geo_scal_loss, FocalLoss, DiceLoss
 from occdepth.models.SFA import SFA
 from occdepth.loss.CRP_loss import compute_super_CP_multilabel_loss
 import numpy as np
@@ -72,6 +72,12 @@ class OccDepth(pl.LightningModule):
         self.CE_ssc_loss = config.CE_ssc_loss
         self.sem_scal_loss = config.sem_scal_loss
         self.geo_scal_loss = config.geo_scal_loss
+
+        # Long-tail loss configuration
+        self.ssc_loss_type = config.get("ssc_loss_type", "ce")
+        self.class_weight_mode = config.get("class_weight_mode", "uniform")
+        self.focal_gamma = config.get("focal_gamma", 2.0)
+        self.dice_smooth = config.get("dice_smooth", 1.0)
 
         self.n_classes = config.n_classes
         self.feature = config.feature
@@ -823,9 +829,35 @@ class OccDepth(pl.LightningModule):
                     sync_dist=True,
                 )
 
-        class_weight = self.class_weights.type_as(batch["img"])
+        # class_weight for ssc loss: supports frequency-based weighting
+        if self.class_weight_mode == "frequency" and self.dataset == "sweeper":
+            from occdepth.data.sweeper.params import sweeper_class_frequencies
+            _freq = np.maximum(sweeper_class_frequencies, 1)
+            class_weight = torch.from_numpy(
+                1.0 / np.log(_freq.astype(np.float64) + 0.001)
+            ).float().to(batch["img"].device)
+        else:
+            class_weight = self.class_weights.type_as(batch["img"])
+
         if self.CE_ssc_loss:
-            loss_ssc = CE_ssc_loss(ssc_pred, target, class_weight)
+            if self.ssc_loss_type == "ce":
+                loss_ssc = CE_ssc_loss(ssc_pred, target, class_weight)
+            elif self.ssc_loss_type == "focal":
+                loss_ssc = FocalLoss(ssc_pred, target, class_weight, self.focal_gamma)
+            elif self.ssc_loss_type == "dice":
+                loss_ssc = DiceLoss(ssc_pred, target, class_weight, self.dice_smooth)
+            elif self.ssc_loss_type == "ce+dice":
+                loss_ssc = (
+                    CE_ssc_loss(ssc_pred, target, class_weight)
+                    + DiceLoss(ssc_pred, target, class_weight, self.dice_smooth)
+                )
+            elif self.ssc_loss_type == "focal+dice":
+                loss_ssc = (
+                    FocalLoss(ssc_pred, target, class_weight, self.focal_gamma)
+                    + DiceLoss(ssc_pred, target, class_weight, self.dice_smooth)
+                )
+            else:
+                raise ValueError(f"Unknown ssc_loss_type: {self.ssc_loss_type}")
             loss += loss_ssc
             self.log(
                 step_type + "/loss_ssc",
